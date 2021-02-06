@@ -1,0 +1,366 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
+<!-- saved from url=(0034)http://web.jet.es/jqc/progii6.html -->
+<HTML><HEAD><TITLE>Especificación</TITLE>
+<META content="text/html; charset=iso-8859-1" http-equiv=Content-Type>
+<META content="Pagina personal de Jeronimo Quesada" name=Description>
+<META content="Electronica, Comunicaciones, Software, Informática" 
+name=Keywords>
+<META content="MSHTML 5.00.2614.3500" name=GENERATOR><BGSOUND loop=infinite 
+src=""></HEAD>
+<BODY aLink=#9eacc7 background=Especificación_archivos/backgnd.gif 
+bgColor=#ffffcc link=#990000 text=#000000 vLink=#666633>
+<P> </P>
+<TABLE border=0 cellPadding=3 cellSpacing=0 width=680>
+  <TBODY>
+  <TR>
+    <TD rowSpan=2 vAlign=top width=110><A 
+      href="http://web.jet.es/jqc/index.html">Bienvenida</A> 
+      <P><A href="http://web.jet.es/jqc/uned.html"><FONT face=ARIAL 
+      size=2>UNED</FONT></A></P></TD>
+    <TD rowSpan=2 vAlign=top width="80%"><FONT face="Comic Sans MS" 
+      size=5>Especificación y corrección</FONT> 
+      <P>Se inicia aquí el tratamiento de las técnicas de especificación de 
+      programas. Las técnicas de especificación se tratan en el Capítulo 2 de 
+      Peña y se incluyen en ese capítulo numerosos ejemplos que conviene 
+      repasar. Resulta también aconsejable repasar el capítulo 1 de otro de los 
+      textos recomendados: </P>
+      <P>JL.Balcázar. "Programación Metódica". McGraw-Hill. 1993 </P>
+      <P>Este capítulo contiene una descripción simple y rigurosa de los 
+      conceptos básicos de especificación. La nota adicional ("excursión" en el 
+      texto) sobre el transformador de predicados <B><I>pmd</I></B> 
+      (precondición más débil) resulta también muy interesante. </P>
+      <P>Ese material cubre de forma apropiada el tema. En estos artículos se 
+      tratarán de aclarar conceptos de manera, a veces, informal, con ejemplos e 
+      incidiendo en los puntos que suelen generar dudas y en las aplicaciones al 
+      diseño y verificación de algoritmos.&nbsp; </P>
+      <P><A name=Introducción></A><FONT face="Comic Sans MS" 
+      size=4>Introducción</FONT> </P>
+      <P>En los artículos que P.J. Plauger (relevante miembro de los comités 
+      ANSI encargados de la normalización del lenguaje C, y luego de C++) 
+      publicaba en la revista "The C User's Journal" , y en los que explicaba la 
+      evolución del proceso de normalización, era frecuente el encontrarse con 
+      apartados análogos al siguiente (traducción libre del artículo original): 
+      </P>
+      <P><I>"Algunas de las funciones declaradas en el módulo de biblioteca 
+      &lt;string.h&gt;</I><SUP><I>1</I></SUP><I> toman un argumento de longitud, 
+      que puede ser cero. Se debatió qué ocurre cuando ese argumento es cero, 
+      resultado:</I> </P>
+      <P><I>Añadido a la subclaúsula 7.11.1, página 162 
+      </I><SUP><I>2</I></SUP><I> :</I> </P>
+      <P><I>Cuando un argumento declarado como size_t </I><B><I>n</I></B><I> 
+      determina la longitud del vector para la función, </I><B><I>n 
+      </I></B><I>puede tomar el valor cero en una llamada a la función 
+      ........... En tal llamada la función que copia caracteres deberá copiar 
+      cero caracteres, mientras que la función que compara dos secuencias de 
+      caracteres deberá devolver cero. </I>" </P>
+      <P>P. J. Plauger. "The C Users Journal", Enero 1994 </P>
+      <P><SUP>1</SUP><FONT size=1> </FONT><FONT size=2>El módulo 
+      &lt;string.h&gt; de la biblioteca C estándar es el contiene las funciones 
+      que permiten copiar, comparar, ... secuencias de caracteres 
+      ("strings")</FONT> </P>
+      <P><SUP>2</SUP><FONT size=1> </FONT><FONT size=2>Del documento ANSI 
+      normalizador del lenguaje C y biblioteca estándar</FONT> </P>
+      <P>Este tipo de decisiones sobre ambigüedades en la definición del 
+      lenguaje o en sus funciones de biblioteca estándar eran frecuentes en el 
+      comité de normalización de C, según reflejaban Plauger, y otros, en sus 
+      artículos. En algunos casos se daban discusiones filosóficas del tipo: " ¿ 
+      Es posible definir vectores de dimensión cero ? ", " Es posible reservar 
+      memoria dinámica de tamaño cero, si es así, ¿ a qué apuntará el puntero 
+      resultante ?" .&nbsp; </P>
+      <P>Sin necesidad de recurrir a entornos de trabajo como el presentado 
+      (comité normalizador) estos problemas de ambigüedad se presentan cuando, 
+      simplemente, un equipo de programadores ha de intercambiar módulos entre 
+      sí. Muchas veces, la única forma de saber a ciencia cierta que hace un 
+      procedimiento o función es revisar su propia implementación, rompiendo así 
+      un principio básico en programación: la separación nítida entre QUÉ hace 
+      un procedimiento y CÓMO lo hace. El usuario del procedimiento no debería 
+      verse afectado ante cambios en el CÓMO si se mantiene constante el QUÉ. 
+      Este es uno de los principios básicos de programación estructurada y una 
+      de las características fundamentales de la moderna programación orientada 
+      a objetos (Encapsulación). </P>
+      <P>Un ejemplo puede ser el de cualquiera de los contenedores de objetos 
+      clásicos. Por ejemplo la PILA. El usuario sólo debe conocer qué objetos se 
+      pueden "apilar" y disponer de funciones para crear una nueva pila, 
+      "apilar", "desapilar" y quizás comprobar si "pila vacía" o "pila llena". 
+      El implementador ha podido implementar la pila inicialmente por medio de 
+      un vector estático de objetos de tamaño fijo. Posteriormente decide 
+      cambiar a una implementación basada en una lista dinámica, por ejemplo. El 
+      usuario no debería verse afectado ante ese cambio si la interfase no 
+      cambia. Esta sería, por ejemplo, la declaración de los procedimientos de 
+      un ejemplo en MODULA 2 en el que utiliza una pila para almacenar los 
+      distintos ensayos pendientes de realizar en un algoritmo de juego: </P><PRE>PROCEDURE NuevaPila(VAR InicioDePila:PPila);
+
+
+
+PROCEDURE Empilar(VAR InicioDePila: PPila;Nuevo: Ensayo);
+
+
+
+PROCEDURE Desapilar(VAR InicioDePila:PPila;VAR e: Ensayo);
+
+
+
+PROCEDURE PilaVacia(VAR InicioDePila:PPila): BOOLEAN;</PRE>
+      <P>El implementador ha podido utilizar un vector para desarrollar la pila 
+      o una lista dinámica u otro tipo de implementación. El utilizador solo ve 
+      el objeto abstracto "Pila de Ensayos". </P>
+      <P>Las técnicas de especificación pretenden resolver las ambigüedades al 
+      establecer QUÉ hace un segmento más o menos extenso de programa (puede ser 
+      desde una sola instrucción a todo un procedimiento o función o todo un 
+      programa). Es importante, también, indicar cuales son los requisitos 
+      previos para que el segmento de programa obtenga el resultado indicado. 
+      Esta es la técnica conocida como especificación Pre-Post. </P>
+      <P>Pero,<U> en la etapa de desarrollo, es necesario mezclar el CÓMO con el 
+      QUÉ</U>. En concreto se tienen dos tipos de problemas: </P>
+      <P>a) <U>El problema de verificación</U> </P>
+      <P>Una vez establecido el QUÉ debe hacer un algoritmo, verificar que el 
+      CÓMO conduce a los resultados establecidos en el QUÉ. </P>
+      <P>b) <U>El problema de diseño</U> </P>
+      <P>Obtener una implementación (es decir un CÓMO) que haga lo establecido 
+      en el QUÉ. </P>
+      <P><FONT face="Comic Sans MS" size=4>Estado de un programa</FONT> </P>
+      <P>Un programa de computador evoluciona a lo largo de su ejecución entre 
+      distintos estados. Un estado queda definido al establecer los valores que 
+      adquieren todas las estructuras de datos involucradas en el programa. </P>
+      <P>Cualquier segmento de programa o algoritmo que sea útil tratará de 
+      cambiar el estado de ciertas variables relevantes desde una situación 
+      inicial menos concreta a otra más concreta y elaborada. </P>
+      <P>Una vez establecidas las variables relevantes en el problema, el 
+      conjunto de estados posible viene dado por las combinaciones de valores en 
+      que pueden encontrarse esas variables. Imagínese, por ejemplo, que el 
+      programa que controla el desplazamiento de un ascensor utiliza dos 
+      variables relevantes: </P>
+      <P><B>p</B>: indica su posición como valor del piso inferior más próximo a 
+      la localización del ascensor. </P>
+      <P><B>m</B>. indica el estado de marcha y puede tomar tres valores: 
+      REPOSO, SUBIENDO, BAJANDO. </P>
+      <P>Los posibles estados son, en este caso, enumerables con relativa 
+      facilidad. Así si existen 4 pisos: Bajo, 1º, 2º, 3º se tendrán los estados 
+      posibles: </P>
+      <P>{Bajo, REPOSO}, {Bajo, SUBIENDO}, {Bajo, BAJANDO},{1º, REPOSO}... </P>
+      <P>... {4º, REPOSO}, {4º BAJANDO} </P>
+      <P>En este problema los estados son enumerables, pero a poca complejidad 
+      que tenga un programa, la enumeración no es posible.&nbsp; </P>
+      <P>Una técnica que permite establecer de forma más compacta los posibles 
+      estados que ha alcanzado un programa en un momento dado es el 
+      establecimiento de un <B>Predicado, Aserto o Aserción</B> sobre las 
+      variables involucradas en el problema. Así, si se está en el 2º piso y lo 
+      que interesa es saber si el ascensor sube desde un piso inferior se puede 
+      decir que: </P>
+      <P>"El ascensor hacia el 2º piso sube desde un piso inferior" equivale a 
+      que : </P>
+      <P>" p &lt; 2º Y m= SUBIENDO"&nbsp; </P>
+      <P>Obsérvese que este Predicado lógico (o Aserto ó Aserción) sólo puede 
+      tener dos soluciones: Cierto o Falso. Cuando toma el valor Cierto queda 
+      determinado un subconjunto de estados : {{Bajo, SUBIENDO}, {1º, 
+      SUBIENDO}}. <U>Es importante mantener esa visión dual entre Predicado y 
+      subconjunto de estados que determina.</U> </P>
+      <P><FONT face="Comic Sans MS" size=4>Predicados, Asertos o 
+      Aserciones</FONT> </P>
+      <P>Como se ha indicado en el apartado anterior un Predicado (o Aserto) es 
+      una expresión , cuyo resultado es de tipo booleano (Falso o Cierto), que 
+      puede incorporarse a texto del programa como comentario, y que pretende 
+      establecer las condiciones que ha de cumplir el ESTADO del programa en ese 
+      punto para que se considere correcta su evolución hasta el punto indicado. 
+      En los Predicados se pueden utilizar operaciones de cualquier tipo, sin 
+      necesidad de que estén soportadas por el lenguaje de programación, siempre 
+      que sean conocidas por los que lean dichos predicados y estén establecidas 
+      sin ambigüedad. Así en un programa de CAD (diseño asistido por ordenador), 
+      dado un círculo (normalmente definido por las coordenadas del centro y el 
+      radio) y un cuadrado (definido, por ejemplo, por las coordenadas de su 
+      extremo superior izquierdo y por su lado) se puede establecer en un punto 
+      de un programa el aserto (suponiendo como variables relevantes el círculo 
+      Circulo1 y el cuadrado Cuadrado1): </P>
+      <P>(* El cuadrado Cuadrado1 está inscrito en el círculo Circulo1 *) 
+      (Predicado 1) </P>
+      <P>Desde luego el lenguaje de programación que se utilice no tiene por qué 
+      soportar la operación que permite inscribir un cuadrado en un círculo. Si 
+      será necesario que cualquiera que lea el programa tenga claro el concepto 
+      de polígono inscrito en un círculo. Este concepto habrá de haberse 
+      definido sin ambigüedad antes, o se supondrá conocido por geometría 
+      elemental. El predicado anterior, colocado en un punto dado del programa 
+      de CAD, tiene como objeto establecer una condición que debe ser cierta en 
+      dicho punto para que las operaciones que se realicen a continuación 
+      conduzcan al resultado deseado. Por ejemplo, si en la variable Radio1 se 
+      almacena el radio de Circulo1 y se tiene una variable Diagonal genérica, 
+      tras la instrucción: </P>
+      <P>Diagonal := 2* Radio1; </P>
+      <P>se cumplirá con seguridad: </P>
+      <P>(* La variable Diagonal contiene el valor de la diagonal de Cuadrado1 
+      *) </P>
+      <P>si antes de ejecutar la instrucción era cierto el Predicado 1. </P>
+      <P><U>Es decir, el hecho de que en un punto dado del programa se cumpla 
+      una condición dada permite, que tras una nueva instrucción, sea posible 
+      determinar si se cumple otra condición. Esta técnica de avance por las 
+      condiciones que cumplen las variables del programa (sus distintos estados) 
+      es la que ha de seguirse en el diseño y verificación de algoritmos</U>. 
+      </P>
+      <P>En la búsqueda de la economía de expresión y la eliminación de 
+      ambigüedades, en la medida de lo posible, es conveniente establecer un 
+      lenguaje distinto al natural para la escritura de predicados lógicos. Este 
+      lenguaje se establece en la bibliografía recomendada y se seguirá en estos 
+      apuntes. En lo que sigue los predicados se incluirán entre llaves {} en 
+      lugar de entre limitadores de comentario de MODULA-2 y se empezarán a 
+      utilizar los operadores lógicos elementales: <FONT face=Symbol>Ù</FONT> ( 
+      Y lógico) y <FONT face=Symbol>Ú</FONT> (O lógico) </P>
+      <P><FONT face="Comic Sans MS" size=4>Predicados y problema de 
+      verificación</FONT> </P>
+      <P>Supóngase que se tiene el siguiente programa, que incluye un predicado 
+      previo (precondición) y otro posterior (postcondición) y en el que 
+      intervienen cuatro variables relevantes: <B>x, y, u y v</B>. definidas 
+      como de tipo real: </P><PRE>{ x&gt;0 <FONT face=Symbol>Ù</FONT> y&gt;0 }
+
+&nbsp;u:= x*y;
+
+&nbsp;v:= u/x;
+
+&nbsp;u:= u/y;
+
+{ u=x <FONT face=Symbol>Ù</FONT> v=y }</PRE>
+      <P>El primer predicado indica que se asegura que las variables 
+      involucradas en el problema tendrán valor positivo al inicio del segmento 
+      de programa. El segundo predicado indica que, tras las operaciones,<B> u 
+      </B>tiene el valor original de<B> x</B> y<B> v</B> el valor original de 
+      <B>y</B>. Se ha de verificar si esto es cierto, suponiendo cierta la 
+      condición inicial (precondición). La verificación de este algoritmo se 
+      realiza sucesivamente partiendo del último predicado (postcondición) </P>
+      <P>si tras la instrucción<B> u:= u/y</B> se tiene <B>u=x </B><FONT 
+      face=Symbol><B>Ù</B></FONT> <B>v=y</B> antes de esa instrucción ha de 
+      ser&nbsp; </P><PRE>{ u=x*y <FONT face=Symbol>Ù</FONT> v=y <FONT face=Symbol>Ù</FONT> y <FONT face=Symbol>¹</FONT> 0 }</PRE>
+      <P>la condición para <B>u</B> se obtiene fácilmente si, en base a la 
+      condición final <B>u=x</B> ,se sustituye en la operación <B>u</B> por 
+      <B>x</B>, se tiene <B>x=u/y</B> de donde se tendrá que <B>u </B>ha de ser 
+      igual a <B>x*y</B>, y ha de ser distinto de cero para que la división 
+      tenga sentido. </P>
+      <P>si tras la instrucción <B>v:= u/x</B> ha de tenerse que: </P><PRE>{ u=x*y <FONT face=Symbol>Ù</FONT> v=y <FONT face=Symbol>Ù</FONT> y <FONT face=Symbol>¹</FONT> 0 }</PRE>
+      <P>se deberá tener antes que <B>y=u</B>/<B>x</B>, lo que conduce de nuevo 
+      a <B>u=x*y</B>, y además que <B>y=x*y/x</B>, lo que conduce a que 
+      <B>y=y</B>, lo cual es evidentemente cierto. Además para que <B>y</B> sea 
+      distinto de cero tras esa instrucción, antes ha de ser <B>u</B> distinto 
+      de cero y <B>x</B> distinto de cero. Por tanto, la condición que debe 
+      cumplirse antes de la instrucción <B>v:=u/x</B> será : </P><PRE>{ u=x*y <FONT face=Symbol>Ù</FONT> y <FONT face=Symbol>¹</FONT> 0 <FONT face=Symbol>Ù</FONT> x <FONT face=Symbol>¹</FONT> 0 }</PRE>
+      <P>para que tras la instrucción <B>u:= x*y</B> se cumpla <B>{u=x*y}</B> no 
+      es, en principio, necesaria ninguna condición previa, ya que la operación 
+      asegura ese resultado, por tanto la condición exigible para la corrección 
+      del programa es que en ese punto sea cierto el predicado: </P><PRE>{ y <FONT face=Symbol>¹</FONT> 0 <FONT face=Symbol>Ù</FONT> x <FONT face=Symbol>¹</FONT> 0 }</PRE>
+      <P>El predicado que indica las condiciones de las variables en ese punto 
+      es el inicial (precondición) que dice que tanto <B>x </B>como <B>y</B> son 
+      mayores que cero. Estas condiciones garantizan las mínimas necesarias para 
+      la corrección del algoritmo, que <B>x</B> e <B>y</B> sean distintas de 
+      cero. Luego el algoritmo es correcto, en principio. </P>
+      <P>Obsérvese el criterio para determinar la corrección: se han recorrido 
+      en orden inverso las operaciones determinando la condición previa a cada 
+      una de ellas para que tras su ejecución se cumpla la condición posterior, 
+      así se llega a una <U>condición inicial mínima</U> que han de cumplir las 
+      variables: ambas han de ser no nulas. En ese punto se nos indicaba que 
+      ambas eran estrictamente mayores que cero, como esta condición asegura 
+      que, desde luego, ambas son no nulas, la condición mínima exigible queda 
+      asegurada y el algoritmo es correcto.&nbsp; </P>
+      <P>No se ha tenido en cuenta un detalle: en la operación u=x*y no se ha de 
+      producir un desbordamiento en la multiplicación. Esta es una condición 
+      denominada <U>de dominio</U> y se ha de prestar también cuidado a este 
+      tipo de condiciones en los programas reales.&nbsp; </P>
+      <P>La condición mínima exigible al inicio del algoritmo es la que J.L 
+      Balcázar denomina <U>Precondición Mas Débi</U>l (<B><I>pmd</I></B>). <B>El 
+      algoritmo será correcto si el predicado establecido al inicio en la 
+      especificación es más fuerte que la pmd</B>. (El concepto de predicado más 
+      fuerte que otro se establecerá en un apartado posterior, en principio 
+      simplemente decir que un predicado más fuerte "exige" más a las 
+      variables). </P>
+      <P><FONT face="Comic Sans MS" size=4>Predicados y problema de 
+      diseño&nbsp;</FONT> </P>
+      <P>El diseño de algoritmos pretende encontrar las operaciones que conducen 
+      a un estado deseado partiendo de un estado inicial previo. Este estado 
+      inicial ha de ser razonablemente fácil de establecer previamente o, en 
+      otras palabras, el estado final ha de ser mucho más elaborado que el 
+      inicial, para que el algoritmo haga una función verdaderamente útil. Por 
+      tanto, en el diseño se establecen operaciones de forma que la condición 
+      final se vaya alcanzando sucesivamente a partir de condiciones menos 
+      fuertes.&nbsp; </P>
+      <P>Supóngase que se nos pide el diseño de un algoritmo capaz de encontrar 
+      el índice correspondiente al mayor entre los elementos de un vector de 
+      enteros de tamaño 3 y con índices 1..3. Es decir se pide que, dado el 
+      vector <B>v[1..3]</B> de enteros, en una variable <B>p</B> se obtenga un 
+      valor tal que: </P><PRE>&nbsp;{1&lt;=<FONT face="UniversalMath1 BT"> </FONT>p<FONT face=Symbol>&lt;=3</FONT> <FONT face=Symbol>Ù</FONT> v[p] <FONT face=Symbol>³</FONT> v[1] <FONT face=Symbol>Ù</FONT> v[p] <FONT face=Symbol>³</FONT> v[2] <FONT face=Symbol>Ù</FONT> v[p] <FONT face=Symbol>³</FONT> v[3]}</PRE>
+      <P>Para obtener este resultado se irán añadiendo instrucciones de forma 
+      que la condición previa a cada una de ellas sea más débil que la 
+      posterior, así si se hace: </P><PRE><B>&nbsp;si</B> v[3]&gt;v[p] <B>entonces </B>p:=3;&nbsp;&nbsp;&nbsp;&nbsp; (I1)</PRE>
+      <P>se tendrá que antes de esta instrucción sólo será necesario que </P><PRE>&nbsp;{ 1&lt;=<FONT face="UniversalMath1 BT"> </FONT>p&lt;=3 <FONT face=Symbol>Ù</FONT> v[p] <FONT face=Symbol>³</FONT> v[1] <FONT face=Symbol>Ù</FONT>&nbsp; v[p] <FONT face=Symbol>³</FONT> v[2]}</PRE>
+      <P>ya que la instrucción asegura que v[p] <FONT face=Symbol>³</FONT> v[3], 
+      si antes de la instrucción I1 se hace </P><PRE><B>&nbsp;si</B> v[2]&gt;v[p] <B>entonces </B>p:=2;&nbsp;&nbsp;&nbsp;&nbsp; (I2)</PRE>
+      <P>se tendrá que para que tras esa instrucción se cumpla (P2) tan sólo 
+      será necesario que antes se cumpla </P><PRE>&nbsp;{1&lt;=p&lt;=3<FONT face=Symbol>Ù </FONT>v[p] <FONT face=Symbol>³</FONT> v[1]}</PRE>
+      <P>si antes de la instrucción I2 se hace </P><PRE><B>&nbsp;si</B> v[1]&gt;v[p] <B>entonces </B>p:=1;&nbsp;&nbsp;&nbsp;&nbsp; (I3)</PRE>
+      <P>entonces antes de esa instrucción tan sólo será necesario que&nbsp; 
+</P><PRE>&nbsp;{1&lt;=p&lt;=3}</PRE>
+      <P>Esta condición se cumple fácilmente si se hace p:=1, por ejemplo. Es 
+      decir el programa resultante es (se incluyen los predicados intermedios 
+      como comentario): </P><PRE>&nbsp;{cierto}</PRE><PRE>&nbsp;p:=1;</PRE><PRE>&nbsp;{1&lt;=<FONT face="UniversalMath1 BT"> </FONT>p&lt;=3 }</PRE><PRE><B>&nbsp;si</B> v[1]&gt;v[p] <B>entonces </B>p:=1;&nbsp;&nbsp;&nbsp;&nbsp; (I3)</PRE><PRE>&nbsp;{1&lt;=p&lt;=3 <FONT face=Symbol>Ù</FONT> v[p] <FONT face=Symbol>³</FONT> v[1]}</PRE><PRE><B>&nbsp;si</B> v[2]&gt;v[p] <B>entonces </B>p:=2;&nbsp;&nbsp;&nbsp;&nbsp; (I2)</PRE><PRE>&nbsp;{1&lt;=<FONT face="UniversalMath1 BT"> </FONT>p&lt;=3 <FONT face=Symbol>Ù</FONT> v[p] <FONT face=Symbol>³</FONT> v[1] <FONT face=Symbol>Ù</FONT> v[p] <FONT face=Symbol>³</FONT> v[2]}</PRE><PRE><B>&nbsp;si</B> v[3]&gt;v[p] <B>entonces </B>p:=3;&nbsp;&nbsp;&nbsp;&nbsp; (I1)</PRE><PRE>&nbsp;{1&lt;=p&lt;=3<FONT face=Symbol> Ù </FONT>v[p] <FONT face=Symbol>³</FONT> v[1] <FONT face=Symbol>Ù</FONT> v[p] <FONT face=Symbol>³</FONT> v[2] <FONT face=Symbol>Ù</FONT>&nbsp; v[p] <FONT face=Symbol>³</FONT> v[3] }</PRE>
+      <P>como precondición no es necesario pedir nada especial antes, es decir 
+      se puede utilizar un predicado que no exige nada a las variables 
+      involucradas en ese punto, ese predicado es el predicado <I>Cierto</I>. 
+      </P>
+      <P>La postcondición es la que se pretendía obtener: </P><PRE>&nbsp;{1&lt;=p&lt;=3<FONT face=Symbol> Ù </FONT>v[p] <FONT face=Symbol>³</FONT> v[1] <FONT face=Symbol>Ù</FONT> v[p] <FONT face=Symbol>³</FONT> v[2] <FONT face=Symbol>Ù</FONT>&nbsp; v[p] <FONT face=Symbol>³</FONT> v[3] }</PRE>
+      <P>es decir, en <B>p</B> se devuelve el índice del mayor valor del vector. 
+      </P>
+      <P>Observando el programa anterior se puede comprobar que no sería difícil 
+      generalizarlo para vectores de dimensión N genérica, utilizando un bucle 
+      para la implementación: </P><PRE>p:= 1;
+
+<B>para</B> i:= 1 <B>hasta </B>N <B>hacer</B> (P)&nbsp;
+
+<B>&nbsp;&nbsp;&nbsp; si </B>v[i]&gt;v[p] <B>entonces </B>p:=i;
+
+<B>fpara</B></PRE>
+      <P>el predicado (P) que ha de cumplirse en la entrada a las instrucciones 
+      al cuerpo interior del bucle será (generalizando los predicados 
+      intermedios en el programa ...) </P><PRE>(1&lt;=p &lt;=N<FONT face=Symbol>&nbsp; Ù</FONT> para todo <FONT face=Symbol>a</FONT> tal que 1<FONT face=Symbol>&lt;=</FONT> <FONT face=Symbol>a&lt;=</FONT> i se tiene que v[p]&gt;=v[<FONT face=Symbol>a</FONT>] )</PRE>
+      <P>este es el denominado <U>Invariante</U> del bucle (ver Peña Cap 4), un 
+      predicado que se cumple siempre en cada entrada a las intrucciones al 
+      cuerpo interior del bucle y que, por tanto, se cumplirá también cuando el 
+      bucle finalice, momento en que i valdrá N y se tendrá : </P><PRE>(1&lt;=p&lt;= N <FONT face=Symbol>Ù</FONT> para todo <FONT face=Symbol>a</FONT> tal que 1&lt;=<FONT face=Symbol>a&lt;=</FONT> N se tiene que v[p]&gt;=v[<FONT face=Symbol>a</FONT>] )</PRE>
+      <P>que equivale a decir que <B>p</B> es el índice del mayor de los 
+      elementos del vector <B>v</B>.&nbsp; </P>
+      <P>Obsérvese la técnica seguida en el diseño: <U>se van ejecutando 
+      instrucciones que aseguren algunas de las condiciones que se piden en los 
+      predicados, de forma que el predicado previo a dichas instrucciones pueda 
+      ser menos exigente. Así hasta obtener un predicado fácil de cumplir en el 
+      punto inicial del segmento de programa o algoritmo</U>. </P>
+      <P>El establecimiento de predicados de la forma más compacta y menos 
+      ambigua posible requiere de un lenguaje concreto que se expondrá en 
+      posteriores apartados y que puede verse en Peña Cap. 2.&nbsp; </P>
+      <P><FONT face="Comic Sans MS" size=4>Conclusiones</FONT> </P>
+      <P>El lenguaje de predicados y las técnicas asociadas son una herramienta 
+      importante en: </P>
+      <UL>
+        <LI>La especificación de módulos de software independientes, permitiendo 
+        una clara separación entre funcionalidad e implementación. </LI></UL>
+      <UL>
+        <LI>El diseño sistemático de algoritmos. Éste, como indica J.L. 
+        Balcázar, es uno de los puntos clave de la programación metódica. Las 
+        técnicas de predicados no sirven tanto para verificar algoritmos ajenos, 
+        como para guiar el diseño y permitir una metodología sistemática y 
+        rigurosa, como se verá más adelante en los apartados de diseño recursivo 
+        e iterativo. </LI></UL>
+      <UL>
+        <LI>La verificación de segmentos de programa.&nbsp; </LI></UL>
+      <P>Todo ello requiere un cierto dominio de las técnicas básicas, los 
+      operadores lógicos y cuantificadores y la relación mental que siempre ha 
+      de mantenerse entre establecimiento de predicados sobre las variables 
+      significativas de un programa y estado del mismo.&nbsp;</P>
+      <P>Para practicar la verificación y derivación de instrucciones puede ser 
+      útil la siguiente colección de ejercicios:</P>
+      <P><A href="http://web.jet.es/jqc/derivacion_instrucciones.pdf" 
+      name="derivacion de instrucciones">derivacion_instrucciones.pdf</A></P>
+      <P>&nbsp;</P></TD></TR></TBODY></TABLE>
+<P><FONT face="Bradley Hand ITC" size=3>Sonido de fondo: "Penelope" de J.M. 
+Serrat Cortesía de Pere Mas Pascua</FONT><FONT face="Bradley Hand ITC" 
+size=2>l</FONT> </P>
+<P><FONT size=2>© Jerónimo Quesada 1998</FONT> <BR>&nbsp; <BR>&nbsp; </P>
+<P><FONT size=2>Los contenidos de estas páginas pueden ser reproducidos para uso 
+didáctico individual siempre que se cite el origen y no sean objeto de actividad 
+de intercambio comercial de ningún tipo. En cualesquiera otras condiciones la 
+copia, transmisión o almacenamiento por cualquier medio tipográfico, 
+fotográfico, informático, telemático u otros requiere la autorización expresa 
+del autor. Se agradecerá la comunicación de cualquier errata así como cualquier 
+comentario o sugerencia.</FONT> </P></BODY></HTML>

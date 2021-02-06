@@ -1,0 +1,773 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<HTML>
+<HEAD>
+ <META NAME="GENERATOR" CONTENT="LinuxDoc-Tools 0.9.21">
+ <TITLE>Dentro del n&uacute;cleo Linux 2.4: Arrancando</TITLE>
+ <LINK HREF="dentro-nucleo-linux-2.html" REL=next>
+
+ <LINK HREF="dentro-nucleo-linux.html#toc1" REL=contents>
+</HEAD>
+<BODY>
+<A HREF="dentro-nucleo-linux-2.html">Página siguiente</A>
+Página anterior
+<A HREF="dentro-nucleo-linux.html#toc1">Índice general</A>
+<HR>
+<H2><A NAME="s1">1.</A> <A HREF="dentro-nucleo-linux.html#toc1">Arrancando</A></H2>
+
+
+<H2><A NAME="ss1.1">1.1</A> <A HREF="dentro-nucleo-linux.html#toc1.1">Construyendo la Imagen del N&uacute;cleo Linux</A>
+</H2>
+
+<P>Esta secci&oacute;n explica los pasos dados durante la compilaci&oacute;n del n&uacute;cleo
+Linux y la salida producida en cada etapa.
+El proceso de construcci&oacute;n depende de la arquitectura, por lo tanto me
+gustar&iacute;a enfatizar que s&oacute;lo consideraremos la construcci&oacute;n de un
+n&uacute;cleo Linux/x86.</P>
+<P>Cuando el usuario escribe 'make zImage' o 'make bzImage' la imagen
+inicializable del n&uacute;cleo resultante es almacenado como
+<CODE>arch/i386/boot/zImage</CODE> o
+<CODE>arch/i386/boot/bzImage</CODE> respectivamente.
+Aqu&iacute; est&aacute; como es construida la imagen:
+<OL>
+<LI> Los archivos fuente en C y ensamblador son compilados en formato
+de objetos reasignables ELF (.o) y algunos de ellos son
+agrupados l&oacute;gicamente en archivos (.a) usando <B>ar(1)</B>.
+</LI>
+<LI> Usando <B>ld(1)</B>, los anteriores .o y .a son enlazados en
+<CODE>vmlinux</CODE>, el cual es un fichero ejecutable ELF 32-bits
+LSB 80386 est&aacute;ticamente enlazado al que no se le han eliminado los
+s&iacute;mbolos de depuraci&oacute;n.
+</LI>
+<LI> <CODE>System.map</CODE> es producido por <B>nm vmlinux</B>, donde
+los s&iacute;mbolos irrelevantes o que no interesan son desechados.
+</LI>
+<LI> Se entra en el directorio <CODE>arch/i386/boot</CODE>.
+</LI>
+<LI> El c&oacute;digo de ensamblador del sector de arranque <CODE>bootsect.S</CODE>
+es preprocesado con o sin <B>-D__BIG_KERNEL__</B>,
+dependiendo de cuando el objetivo es bzImage o zImage, en
+<CODE>bbootsect.s</CODE> o <CODE>bootsect.s</CODE> respectivamente.
+</LI>
+<LI> <CODE>bbootsect.s</CODE> es ensamblado y entonces convertido en
+la forma 'raw binary' llamada <CODE>bbootsect</CODE> (o
+<CODE>bootsect.s</CODE> ensamblado y convertido a raw en
+<CODE>bootsect</CODE> para zImage).
+</LI>
+<LI> El c&oacute;digo de configuraci&oacute;n <CODE>setup.S</CODE> (<CODE>setup.S</CODE>
+incluye <CODE>video.S</CODE>) es preprocesado en <CODE>bsetup.s</CODE>
+para bzImage o <CODE>setup.s</CODE> para zImage. De la misma forma
+que el c&oacute;digo del sector de arranque, la diferencia radica en
+que -<B>D__BIG_KERNEL__</B> est&aacute; presente para bzImage. El
+resultado es entonces convertido en la forma 'raw binary'
+llamada <CODE>bsetup</CODE>.
+</LI>
+<LI> Se entra en el directorio <CODE>arch/i386/boot/compressed</CODE> y se
+convierte  <CODE>/usr/src/linux/vmlinux</CODE> a $tmppiggy (nombre
+temporal) en el formato binario raw, borrando las
+secciones ELF <CODE>.note</CODE> y <CODE>.comment</CODE>.
+</LI>
+<LI> <B>gzip -9 &lt; $tmppiggy > $tmppiggy.gz</B>
+</LI>
+<LI> Se enlaza $tmppiggy.gz en ELF reasignable (<B>ld -r</B>)
+<CODE>piggy.o</CODE>.
+</LI>
+<LI> Compila las rutinas de compresi&oacute;n <CODE>head.S</CODE> y
+<CODE>misc.c</CODE> (todav&iacute;a en el directorio
+<CODE>arch/i386/boot/compressed</CODE>) en los objetos
+ELF <CODE>head.o</CODE> y <CODE>misc.o</CODE>.
+</LI>
+<LI> Se enlazan todas ellas: <CODE>head.o</CODE>, <CODE>misc.o</CODE> y
+<CODE>piggy.o</CODE> en <CODE>bvmlinux</CODE> (o <CODE>vmlinux</CODE> para
+zImage, ¡no confundas esto con
+<CODE>/usr/src/linux/vmlinux</CODE>!). Destacar la diferencia entre 
+<B>-Ttext 0x1000</B> usado para <CODE>vmlinux</CODE> y
+<B>-Ttext 0x100000</B> para <CODE>bvmlinux</CODE>, esto es, el
+cargador de compresi&oacute;n para bzImage es cargado m&aacute;s arriba.
+</LI>
+<LI> Se convierte <CODE>bvmlinux</CODE> a 'raw binary' <CODE>bvmlinux.out</CODE>
+borrando las secciones ELF <CODE>.note</CODE> y <CODE>.comment</CODE>.
+</LI>
+<LI> Se vuelve atr&aacute;s al directorio <CODE>arch/i386/boot</CODE> y, usando
+el programa <B>tools/build</B>, se concatenan todos ellos:
+<CODE>bbootsect</CODE>, <CODE>bsetup</CODE> y <CODE>compressed/bvmlinux.out</CODE>
+en <CODE>bzImage</CODE> (borra la 'b' extra anterior para <CODE>zImage</CODE>).
+Esto escribe variables importantes como <CODE>setup_sects</CODE> y
+<CODE>root_dev</CODE> al final del sector de arranque.</LI>
+</OL>
+
+El tama&ntilde;o del sector de arranque es siempre de 512 bytes. El tama&ntilde;o
+de la configuraci&oacute;n debe ser mayor que 4 sectores, pero est&aacute; limitado
+superiormente sobre los 12k - la regla es:</P>
+<P>0x4000 bytes >= 512 + sectores_configuraci&oacute;n * 512 + espacio para la
+pila mientras est&aacute; funcionando el sector de arranque/configuraci&oacute;n</P>
+<P>Veremos m&aacute;s tarde de d&oacute;nde viene esta limitaci&oacute;n.</P>
+<P>El l&iacute;mite superior en el tama&ntilde;o de bzImage producido en este paso
+est&aacute; sobre los 2.5M para arrancarcon LILO y 0xFFFF p&aacute;rrafos ((0xFFFF0 =
+1048560 bytes) para arrancar im&aacute;genes directamentee, por ejemplo desde
+un diskette o CD-ROM (con el modo de emulaci&oacute;n El-Torito).</P>
+<P>Destacar que mientras que <B>tools/build</B> valida el tama&ntilde;o del
+sector de arranque, la imagen del n&uacute;cleo y el l&iacute;mite inferior del
+tama&ntilde;o de la configuraci&oacute;n, no chequea el l&iacute;mite *superior* de
+dicho tama&ntilde;o de
+configuraci&oacute;n. Entonces, es f&aacute;cil construir un n&uacute;cleo defectuoso
+justamente sum&aacute;ndole alg&uacute;n gran ".espacio" al final de <CODE>setup.S</CODE>.</P>
+
+<H2><A NAME="ss1.2">1.2</A> <A HREF="dentro-nucleo-linux.html#toc1.2">Arrancando: Vista General</A>
+</H2>
+
+
+<P>Los detalles del proceso de arranque son espec&iacute;ficos de cada
+arquitectura, por lo tanto centraremos nuestra atenci&oacute;n en la
+arquitectura IBM PC/IA32. Debido al dise&ntilde;o antiguo y a la
+compatibilidad hacia atr&aacute;s, el firmware del PC arranca el sistema
+operativo a la vieja usanza. Este proceso puede ser separado en las
+siguientes seis etapas l&oacute;gicas:</P>
+<P>
+<OL>
+<LI> La BIOS selecciona el dispositivo de arranque.</LI>
+<LI> La BIOS carga el sector de arranque del dispositivo de arranque.</LI>
+<LI> El sector de arranque carga la configuraci&oacute;n, las rutinas de
+descompresi&oacute;n y la imagen del n&uacute;cleo comprimida.</LI>
+<LI> El n&uacute;cleo es descomprimido en modo protegido.</LI>
+<LI> La inicializaci&oacute;n de bajo nivel es realizada por el c&oacute;digo
+ensamblador.</LI>
+<LI> Inicializaci&oacute;n de alto nivel en C.</LI>
+</OL>
+</P>
+
+<H2><A NAME="ss1.3">1.3</A> <A HREF="dentro-nucleo-linux.html#toc1.3">Arrancando: BIOS POST</A>
+</H2>
+
+
+<P>
+<OL>
+<LI> La fuente de alimentaci&oacute;n inicia el generador de reloj y aserta
+la se&ntilde;al #POWERGOOD en el bus.</LI>
+<LI> La linea CPU #RESET es asertada (CPU est&aacute; ahora en modo real 8086).</LI>
+<LI> %ds=%es=%fs=%gs=%ss=0, %cs=0xFFFF0000,%eip = 0x0000FFF0 (c&oacute;digo ROM BIOS POST).</LI>
+<LI> Todos los chequeos POST son realizados con las interrupciones
+deshabilitadas.</LI>
+<LI> La TVI (Tabla de Vectores de Interrupci&oacute;n) es inicializada en la
+direcci&oacute;n 0.</LI>
+<LI> La funci&oacute;n de la BIOS de cargador de la  rutina de arranque es
+llamada a trav&eacute;s de la <B>int0x19</B>, con %dl conteniendo
+el dispositivo de arranque 'n&uacute;mero de controladora'. Esto carga
+la pista 0, sector 1 en la direcci&oacute;n f&iacute;sica 0x7C00 (0x07C0:0000).</LI>
+</OL>
+</P>
+
+<H2><A NAME="ss1.4">1.4</A> <A HREF="dentro-nucleo-linux.html#toc1.4">Arrancando: sector de arranque y configuraci&oacute;n</A>
+</H2>
+
+
+<P>El sector de arranque usado para arrancar el n&uacute;cleo Linux puede ser uno
+de los siguientes:</P>
+<P>
+<UL>
+<LI> Sector de arranque de Linux (<CODE>arch/i386/boot/bootsect.S</CODE>),</LI>
+<LI> Sector de arranque de LILO (u otros cargadores de arranque)  o</LI>
+<LI> sin sector de arranque (loadlin, etc)</LI>
+</UL>
+</P>
+<P>Consideraremos aqu&iacute; el sector de arranque de Linux en detalle.
+Las primeras lineas inicializan las macros convenientes para ser usadas
+por los valores de segmento:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+29 SETUPSECS = 4                /* tama&ntilde;o por defecto de los sectores de configuraci&oacute;n */
+30 BOOTSEG   = 0x07C0           /* direcci&oacute;n original del sector de arranque */
+31 INITSEG   = DEF_INITSEG      /* movemos el arranque aqu&iacute; - lejos del camino */
+32 SETUPSEG  = DEF_SETUPSEG     /* la configuraci&oacute;n empieza aqu&iacute; */
+33 SYSSEG    = DEF_SYSSEG       /* el sistema es cargado en 0x10000 (65536) */
+34 SYSSIZE   = DEF_SYSSIZE      /* tama&ntilde;o del sistema: # de palabras de 16 bits */
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>(los n&uacute;meros a la izquierda son los n&uacute;meros de linea del archivo
+bootsect.S)
+Los valores de <CODE>DEF_INITSEG</CODE>, <CODE>DEF_SETUPSEG</CODE>, 
+<CODE>DEF_SYSSEG</CODE> y <CODE>DEF_SYSSIZE</CODE> son tomados desde
+<CODE>include/asm/boot.h</CODE>:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+/* No toques esto, a menos que realmente sepas lo que est&aacute;s haciendo. */
+#define DEF_INITSEG     0x9000
+#define DEF_SYSSEG      0x1000
+#define DEF_SETUPSEG    0x9020
+#define DEF_SYSSIZE     0x7F00
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Ahora, consideremos el c&oacute;digo actual de <CODE>bootsect.S</CODE>:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+    54          movw    $BOOTSEG, %ax
+    55          movw    %ax, %ds
+    56          movw    $INITSEG, %ax
+    57          movw    %ax, %es
+    58          movw    $256, %cx
+    59          subw    %si, %si
+    60          subw    %di, %di
+    61          cld
+    62          rep
+    63          movsw
+    64          ljmp    $INITSEG, $go
+       
+    65  # bde - cambiado 0xff00 a 0x4000 para usar el depurador despu&eacute;s de 0x6400 (bde).
+    66  # No tendr&iacute;amos que preocuparnos por esto si chequeamos el l&iacute;mite superior
+    67  # de la memoria. Tambi&eacute;n mi BIOS puede ser configurada para poner las tablas
+    68  # wini de controladoras en la memoria alta en vez de en la tabla de vectores. 
+    69  # La vieja pila quiz&aacute;s tenga que ser insertada en la tabla de controladores.
+       
+    70  go:     movw    $0x4000-12, %di         # 0x4000 es un valor arbitrario >=
+    71                                          # longitud de sector de arranque + longitud de la 
+    72                                          # configuraci&oacute;n + espacio para la pila;
+    73                                          # 12 es el tama&ntilde;o parm del disco.
+    74          movw    %ax, %ds                # ax y es ya contienen INITSEG
+    75          movw    %ax, %ss
+    76          movw    %di, %sp                # pone la pila en INITSEG:0x4000-12.
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Las lineas 54-63, mueven el c&oacute;digo del sector de arranque desde la
+direcci&oacute;n 0x7C00 a 0x90000.
+Esto es realizado de la siguiente manera:</P>
+<P>
+<OL>
+<LI> establece %ds:%si a $BOOTSEG:0 (0x7C0:0 = 0x7C00)
+</LI>
+<LI> establece %es:%di a $INITSEG:0 (0x9000:0 = 0x90000)
+</LI>
+<LI> establece el n&uacute;mero de palabras de 16 bits en %cx (256 palabras = 512 bytes = 1 sector) 
+</LI>
+<LI> limpia la bandera DF (direcci&oacute;n) en EFLAGS a direcciones auto-incrementales (cld)
+</LI>
+<LI> va all&iacute; y copia 512 bytes (rep movsw)</LI>
+</OL>
+</P>
+<P>El motivo por el que este c&oacute;digo no usa <CODE>rep movsd</CODE> es
+intencionado (hint - .code16).</P>
+<P>La l&iacute;nea 64 salta a la etiqueta <CODE>go:</CODE> en la nueva copia hecha
+del sector de arranque, esto es, en el segmento 0x9000. Esto y las
+tres instruciones siguientes (lineas 64-76) preparan la pila en
+$INITSEG:0x4000-0xC, esto es, %ss = $INITSEG (0x9000) y %sp
+= 0x3FF4 (0x4000-0xC). Aqu&iacute; es de d&oacute;nde viene el l&iacute;mite del tama&ntilde;o de
+la configuraci&oacute;n que mencionamos antes (ver Construyendo la Imagen del
+N&uacute;cleo Linux).</P>
+<P>Las lineas 77-103 parchean la tabla de par&aacute;metros del disco para el
+primer disco para permitir lecturas multi-sector:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+    77  # Las tablas por defecto de par&aacute;metros del disco de muchas BIOS
+    78  # no reconocer&aacute;n lecturas multi-sector m&aacute;s all&aacute; del n&uacute;mero m&aacute;ximo especificado
+    79  # en las tablas de par&aacute;metros del diskette por defecto - esto
+    80  # quiz&aacute;s signifique 7 sectores en algunos casos.
+
+    82  # Como que las lecturas simples de sectores son lentas y fuera de la cuesti&oacute;n
+    83  # tenemos que tener cuidado con esto creando nuevas tablas de par&aacute;metros
+    84  # (para el primer disco) en la RAM. Estableceremos la cuenta m&aacute;xima de sectores 
+    85  # a 36 - el m&aacute;ximo que encontraremos en un ED 2.88.
+    86  #
+    87  # Lo grande no hace da&ntilde;o. Lo peque&ntilde;o si.
+    88  #
+    89  # Los segmentos son como sigue: ds = es = ss = cs - INITSEG, fs = 0,
+    90  # y gs queda sin usar.
+       
+    91          movw    %cx, %fs                # establece fs a 0
+    92          movw    $0x78, %bx              # fs:bx es la direcci&oacute;n de la tabla de par&aacute;metros
+    93          pushw   %ds
+    94          ldsw    %fs:(%bx), %si          # ds:si es el c&oacute;digo
+    95          movb    $6, %cl                 # copia 12 bytes
+    96          pushw   %di                     # di = 0x4000-12.
+    97          rep                             # no necesita cld -> hecho en la linea 66
+    98          movsw
+    99          popw    %di
+   100          popw    %ds
+   101          movb    $36, 0x4(%di)           # parchea el contador de sectores
+   102          movw    %di, %fs:(%bx)
+   103          movw    %es, %fs:2(%bx)
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>El controlador de diskettes es reinicializado usando el servicio de la
+BIOS int 0x13 funci&oacute;n 0 (reinicializa FDC) y los sectores de
+configuraci&oacute;n son cargados inmediatamente despu&eacute;s del sector de
+arranque, esto es, en
+la direcci&oacute;n f&iacute;sica 0x90200 ($INITSEG:0x200), otra vez usando el
+servicio de la BIOS int 0x13, funci&oacute;n 2 (leer sector(es)).
+Esto sucede durante las lineas 107-124:
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+   107  load_setup:
+   108          xorb    %ah, %ah                # reinicializa FDC 
+   109          xorb    %dl, %dl
+   110          int     $0x13   
+   111          xorw    %dx, %dx                # controladora 0, cabeza 0
+   112          movb    $0x02, %cl              # sector 2, pista 0
+   113          movw    $0x0200, %bx            # direcci&oacute;n = 512, en INITSEG
+   114          movb    $0x02, %ah              # servicio 2, "leer sector(es)"
+   115          movb    setup_sects, %al        # (asume todos en la cabeza  0, pista 0)
+   116          int     $0x13                   # los lee
+   117          jnc     ok_load_setup           # ok - continua
+       
+   118          pushw   %ax                     # vuelca el c&oacute;digo de error
+   119          call    print_nl
+   120          movw    %sp, %bp
+   121          call    print_hex
+   122          popw    %ax     
+   123          jmp     load_setup
+       
+   124  ok_load_setup:
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Si la carga falla por alguna raz&oacute;n (floppy defectuoso o que alguien
+quit&oacute; el diskette durante la operaci&oacute;n), volcamos el c&oacute;digo de
+error y se intenta en un bucle infinito.
+La &uacute;nica forma de salir de &eacute;l es reiniciando la m&aacute;quina, a menos que
+los reintentos tengan &eacute;xito, pero usualmente no lo tienen (si algo est&aacute;
+mal s&oacute;lo se pondr&aacute; peor).</P>
+<P>Si la carga de los sectores setup_sects del c&oacute;digo de configuraci&oacute;n es
+realizada con &eacute;xito, saltamos a la etiqueta <CODE>ok_load_setup:</CODE>.</P>
+<P>Entonces procedemos a cargar la imagen comprimida del n&uacute;cleo en la
+direcci&oacute;n f&iacute;sica 0x10000. Esto es realizado para preservar las &aacute;reas
+de datos del firmware en la memoria baja (0-64K). Despu&eacute;s de que es
+cargado el n&uacute;cleo, saltamos a $SETUPSEG:0(<CODE>arch/i386/boot/setup.S</CODE>).
+Una vez que los datos no se necesitan mas (ej. no se realizan m&aacute;s
+llamadas a la BIOS) es sobreescrito moviendo la imagen entera
+(comprimida) del n&uacute;cleo desde 0x10000 a 0x1000 (direcciones f&iacute;sicas,
+por supuesto).
+Esto es hecho por <CODE>setup.S</CODE>, el cual prepara las cosas para el
+modo protegido y salta a 0x1000, que es el comienzo del n&uacute;cleo
+comprimido, esto es, <CODE>arch/386/boot/compressed/{head.S,misc.c}</CODE>.
+Esto inicializa la pila y llama a <CODE>decompress_kernel()</CODE>, que
+descomprime el n&uacute;cleo en la direcci&oacute;n 0x100000 y salta a ella.</P>
+<P>Destacar que los viejos cargadores de arranque (viejas versiones de LILO)
+s&oacute;lo pod&iacute;an cargar los 4 primeros sectores de la configuraci&oacute;n, el
+cual es el motivo por el que existe c&oacute;digo en la configuraci&oacute;n para
+cargar el resto de si mismo si se necesita. Tambi&eacute;n, el c&oacute;digo en la
+configuraci&oacute;n tiene que tener cuidado de varias combinaciones de
+tipo/versi&oacute;n del cargador vs zImage/bzImage y esto es altamente
+complejo.</P>
+<P>Examinemos este truco en el c&oacute;digo del sector de arranque que nos
+permite cargar un n&uacute;cleo grande, tambi&eacute;n conocido como "bzImage".</P>
+<P>Los sectores de configuraci&oacute;n son cargados usualmente en la direcci&oacute;n
+0x90200, pero el n&uacute;cleo es cargado en fragmentos de 64k cada vez usando
+una rutina de ayuda especial que llama a la BIOS para mover datos desde
+la memoria baja a la memoria alta. Esta rutina de ayuda es referida por
+<CODE>bootsect_kludge</CODE> en <CODE>bootsect.S</CODE> y es definida como 
+<CODE>bootsect_helper</CODE> en <CODE>setup.S</CODE>.
+La etiqueta <CODE>bootsect_kludge</CODE> en <CODE>setup.S</CODE> contiene el
+valor del segmento de configuraci&oacute;n y el desplazamiento del c&oacute;digo
+<CODE>bootsect_helper</CODE> en &eacute;l, por lo que el sector de arranque puede
+usar la instrucci&oacute;n <CODE>lcall</CODE> para saltar a &eacute;l (salto entre
+segmentos).
+El motivo por lo cual esto es realizado en <CODE>setup.S</CODE> es
+simplemente porque no existe m&aacute;s espacio libre en bootsect.S (lo cual no es
+estrictamente verdad - hay aproximadamente 4 bytes dispersos y al menos
+1 byte disperso en <CODE>bootsect.S</CODE>, pero que obviamente no es
+suficiente).
+Esta rutina usa el servicio de la BIOS int 0x15 (ax=0x8700) para moverlo
+a la memoria alta y restablecer %es al punto de siempre 0x10000. Esto
+asegura que el c&oacute;digo en <CODE>bootsect.S</CODE> no se va fuera de memoria
+cuando est&aacute; copiando datos desde disco.</P>
+
+<H2><A NAME="ss1.5">1.5</A> <A HREF="dentro-nucleo-linux.html#toc1.5">Usando LILO como cargador de arranque </A>
+</H2>
+
+
+<P>Existen varias ventajas en usar un cargador de arranque especializado
+(LILO) sobre un esqueleto desnudo de un sector de arranque:</P>
+<P>
+<OL>
+<LI> Habilidad para escoger entre varios n&uacute;cleos Linux o
+incluso m&uacute;ltiples Sistemas Operativos.</LI>
+<LI> Habilidad para pasar par&aacute;metros a la linea de comandos del
+n&uacute;cleo (existe un parche llamado BCP que a&ntilde;ade esta habilidad al
+esqueleto desnudo de sector de arranque + configuraci&oacute;n).</LI>
+<LI> Habilidad para cargar n&uacute;cleos bzImage m&aacute;s grandes - hasta los 
+2.5M vs 1M.</LI>
+</OL>
+
+Viejas versiones de LILO (v17 y anteriores) no pod&iacute;an cargar n&uacute;cleos
+bzImage. Las versiones m&aacute;s nuevas (como las de hace un par de a&ntilde;os y
+posteriores) usan la misma t&eacute;cnica que el sector de arranque +
+configuraci&oacute;n de mover datos desde la memoria baja a la memoria
+alta mediante los servicios de la BIOS. Alguna gente (notablemente
+Peter Anvin) argumentan que el soporte para zImage deber&iacute;a de ser
+quitado. El motivo principal (de acuerdo con Alan Cox) para que
+permanezca es que aparentemente existen algunas BIOS defectuosas que
+hacen imposible arrancar n&uacute;cleos bzImage, mientras que la carga de
+n&uacute;cleos zImage se realiza correctamente.</P>
+<P>La &uacute;ltima cosa que hace LILO es saltar a <CODE>setup.S</CODE> y entonces
+las cosas prosiguen de la forma normal.</P>
+<H2><A NAME="ss1.6">1.6</A> <A HREF="dentro-nucleo-linux.html#toc1.6">Inicializaci&oacute;n de Alto Nivel </A>
+</H2>
+
+
+<P>Por "Inicializaci&oacute;n de Alto Nivel" consideramos cualquier cosa que no
+est&aacute; directamente relacionada con la fase de arranque, incluso
+aquellas partes del c&oacute;digo que est&aacute;n escritas en ensamblador, 
+esto es <CODE>arch/i386/kernel/head.S</CODE>, que es el
+comienzo del n&uacute;cleo descomprimido. Los siguientes pasos son realizados:</P>
+<P>
+<OL>
+<LI> Inicializa los valores de segmento (%ds = %es = %fs = %gs = __KERNEL_DS = 0x18).</LI>
+<LI> Inicializa las tablas de p&aacute;ginas.</LI>
+<LI> Habilita el paginamiento estableciendo el bit PG en %cr0.</LI>
+<LI> Limpia a cero BSS (en SMP, s&oacute;lo la primera CPU realiza esto).</LI>
+<LI> Copia los primeros 2k de los par&aacute;metros de arranque (linea de
+comandos del n&uacute;cleo).</LI>
+<LI> Chequea el tipo de CPU usando EFLAGS y, si es posible, cpuid,
+capaz de detectar 386 y superiores.</LI>
+<LI> La primera CPU llama a <CODE>start_kernel()</CODE>,y si ready=1 todas
+las otras llaman a <CODE>arch/i386/kernel/smpboot.c:initialize_secondary()</CODE>
+el cual recarga esp/eip y no retorna.</LI>
+</OL>
+</P>
+<P>La funci&oacute;n <CODE>init/main.c:start_kernel()</CODE> est&aacute; escrita en C y
+realiza lo siguiente:</P>
+<P>
+<OL>
+<LI> Realiza un cierre global del n&uacute;cleo (es necesario para que s&oacute;lo 
+una CPU realice la inicializaci&oacute;n).</LI>
+<LI> Realiza configuraciones espec&iacute;ficas de la arquitectura
+(an&aacute;lisis de la capa de memoria, copia de la linea de comandos
+de arranque otra vez, etc.).</LI>
+<LI> Muestra el "anuncio" del n&uacute;cleo Linux conteniendo la versi&oacute;n, el
+compilador usado para construirlo, etc ..., a la memoria intermedia con forma de
+anillo del n&uacute;cleo para los mensajes. Esto es tomado desde la 
+variable linux_banner definida en init/version.c y es la misma
+cadena mostrada por <B>cat /proc/version</B>. 
+</LI>
+<LI> Inicializa las traps.</LI>
+<LI> Inicializa las irqs.</LI>
+<LI> Inicializa los datos requeridos por el planificador (scheduler).</LI>
+<LI> Inicializa el tiempo manteniendo los datos.</LI>
+<LI> Inicializa el subsistema softirq.</LI>
+<LI> Analiza las opciones del arranque de la linea de comandos.</LI>
+<LI> Inicializa la consola.</LI>
+<LI> Si el soporte para m&oacute;dulos ha sido compilado en el n&uacute;cleo,
+inicializa la facilidad para la carga din&aacute;mica de m&oacute;dulos.</LI>
+<LI> Si la linea de comandos "profile=" ha sido suministrada,
+inicializa los perfiles de memoria intermedia.</LI>
+<LI> <CODE>kmem_cache_init()</CODE>, inicializa la mayor&iacute;a del asignador
+slab.</LI>
+<LI> Habilita las interrupciones.</LI>
+<LI> Calcula el valor BogoMips para esta CPU.</LI>
+<LI> Llama a <CODE>mem_init()</CODE>, que calcula <CODE>max_mapnr</CODE>,
+<CODE>totalram_pages</CODE> y <CODE>high_memory</CODE> y muestra la linea
+"Memory: ...".</LI>
+<LI> <CODE>kmem_cache_sizes_init()</CODE>, finaliza la inicializaci&oacute;n del
+asignador slab.</LI>
+<LI> Inicializa las estructuras de datos usadas por procfs.</LI>
+<LI> <CODE>fork_init()</CODE>, crea <CODE>uid_cache</CODE>, inicializa
+<CODE>max_threx_threads</CODE> bas&aacute;ndose en la cantidad de memoria
+disponible y configura <CODE>RLIMIT_NPROC</CODE> para que
+<CODE>init_task</CODE> sea <CODE>max_threads/2</CODE>.</LI>
+<LI> Crea varias antememorias slab necesitadas para VFS, VM, la antememoria
+intermedia, etc.</LI>
+<LI> Si el soporte para System V IPC ha sido compilado en el n&uacute;cleo, 
+inicializa el subsistema. N&oacute;tese que para System V shm, esto incluye 
+el montaje de una instancia (dentro del n&uacute;cleo) del sistema de 
+archivos shmfs.</LI>
+<LI> Si el soporte de quota ha sido compilado en el n&uacute;cleo, crea e
+inicializa una antememoria slab especial para &eacute;l.</LI>
+<LI> Realiza "chequeos de fallos" espec&iacute;ficos de la arquitectura y,
+cuando es posible, activa las correcciones para los fallos de
+procesadores/bus/etc. Comparando varias arquitecturas vemos que
+"ia64 no tiene fallos" e "ia32 tiene unos pocos". Un buen ejemplo
+es el "fallo f00f", el cual es s&oacute;lo chequeado si el n&uacute;cleo ha
+sido compilado para menos de un 686 y corregido adecuadamente.</LI>
+<LI> Establece una bandera para indicar que un planificador deber&iacute;a de
+ser llamado en la "siguiente oportunidad" y crea un hilo del
+n&uacute;cleo <CODE>init()</CODE> que ejecuta execute_command si este ha
+sido suministrado a trav&eacute;s del par&aacute;metro de inicio "init=", o
+intenta ejecutar <B>/sbin/init</B>, <B>/etc/init</B>,
+<B>/bin/init</B>, <B>/bin/sh</B> en este orden; si todos
+estos fallan, ocurre una situaci&oacute;n de p&aacute;nico con la "sugerencia"
+de usar el par&aacute;metro "init=".</LI>
+<LI> Se va a un bucle vac&iacute;o, este es un hilo vac&iacute;o con pid=0.</LI>
+</OL>
+</P>
+<P>Una cosa importante que hay que hacer notar aqu&iacute; es que el hilo del
+n&uacute;cleo <CODE>init()</CODE> llama a <CODE>do_basic_setup()</CODE>, el cual cuando
+vuelve llama a <CODE>do_initcalls()</CODE>, que va a trav&eacute;s de la lista
+de funciones registradas por medio de las macros <CODE>__initcall</CODE> o
+<CODE>module_init()</CODE> y las invoca. Estas funciones no dependen de
+otras o sus dependencias han sido manualmente arregladas por el orden de
+enlazado en los Makefiles. Esto significa que, dependiendo de las
+posici&oacute;n de los directorios en los &aacute;rboles y de las estructuras en los
+Makefiles, el orden en el cual estas funciones de inicializaci&oacute;n son
+llamadas puede cambiar.
+A veces esto es importante, imag&iacute;nate dos subsistemas A y B,
+con B dependiendo de alguna inicializaci&oacute;n realizada por A. Si A es
+compilada est&aacute;ticamente y B es un m&oacute;dulo entonces el punto de entrada
+de B est&aacute; garantizado para ser llamado despu&eacute;s de que A prepare todo el
+entorno necesario. Si A es un m&oacute;dulo, entonces B es tambi&eacute;n
+necesariamente un m&oacute;dulo para que no existan problemas. Pero, ¿qu&eacute;
+pasa si A y B est&aacute;n est&aacute;ticamente enlazadas en el n&uacute;cleo? El orden en
+el cual son llamadas depende del desplazamiento relativo del punto
+de entrada en la secci&oacute;n ELF <CODE>.initcall.init</CODE> de la imagen del
+n&uacute;cleo.
+Rogier Wolff propuso introducir una infraestructura jer&aacute;rquica de
+"prioridades" donde los m&oacute;dulos pueden dejar que el enlazador conozca
+en que orden (relativo) deber&iacute;an de ser enlazados, pero todav&iacute;a
+no existen parches disponibles que implementen esto de una forma
+suficientemente elegante para ser aceptada en el n&uacute;cleo.
+Por consiguiente, aseg&uacute;rate de que el orden de enlace es correcto, Si,
+en el ejemplo anterior, A y B trabajan bien cuando han sido compilados
+est&aacute;ticamente una vez,  trabajar&aacute;n siempre, tal como han sido
+listados secuencialmente en el mismo Makefile. Si no trabajan,
+cambia el orden en el cual sus archivos objetos son listados.</P>
+<P>Otra cosa de alg&uacute;n valor es la habilidad de Linux de ejecutar un
+"programa init alternativo" por medio del pase de la linea de comandos
+"init=". Esto es &uacute;til para la recuperaci&oacute;n desde un <B>/sbin/init</B>
+accidentalmente sobreescrito o para depurar a mano los guiones de
+inicializaci&oacute;n (rc) y <CODE>/etc/inittab</CODE>, ejecut&aacute;ndolos de
+uno en uno.</P>
+
+<H2><A NAME="ss1.7">1.7</A> <A HREF="dentro-nucleo-linux.html#toc1.7">Arranque SMP en x86</A>
+</H2>
+
+
+<P>En SMP, el BP (Procesador de arranque) va a trav&eacute;s de la
+secuencia normal del sector de arranque, configuraci&oacute;n, etc...  hasta
+que llega a <CODE>start_kernel()</CODE>, y entonces sobre
+<CODE>smp_init()</CODE> y especialmente
+<CODE>src/i386/kernel/smpboot.c:smp_boot_cpus()</CODE>. La funci&oacute;n 
+<CODE>smp_boot_cpus()</CODE> entra en un buche para cada apicid (identificador de cada APIC),
+hasta <CODE>NR_CPUS</CODE>, y llama a <CODE>do_boot_cpu()</CODE> en &eacute;l. Lo que hace
+<CODE>do_boot_cpu()</CODE> es crear (esto es: <CODE>fork_by_hand</CODE>) una
+tarea vac&iacute;a para la cpu de destino y escribe en localizaciones bien 
+conocidas definidas por la especificaci&oacute;n Intel MP (0x467/0x469) el EIP del
+c&oacute;digo del trampol&iacute;n encontrado en <CODE>trampoline.S</CODE>. Entonces
+genera STARTUP IPI a la cpu de destino la cual hace que este AP
+(Procesador de Aplicaci&oacute;n) ejecute el c&oacute;digo en <CODE>trampoline.S</CODE>.</P>
+<P>La CPU de arranque crea una copia del c&oacute;digo trampol&iacute;n para cada CPU
+en la memoria baja. El c&oacute;digo del AP escribe un n&uacute;mero m&aacute;gico en su
+propio c&oacute;digo, el cual es verificado por el BP para asegurarse que
+el AP est&aacute; ejecutando el c&oacute;digo trampol&iacute;n. El requerimiento de que el
+c&oacute;digo trampol&iacute;n tenga que estar en la memoria baja es forzado por la
+especificaci&oacute;n Intel MP.</P>
+<P>El c&oacute;digo trampol&iacute;n simplemente establece el registro %bx a uno, entra
+en modo protegido y salta a startup_32, que es la entrada 
+principal a <CODE>arch/i386/kernel/head.S</CODE>.</P>
+<P>Ahora, el AP empieza ejecutando <CODE>head.S</CODE> y descubriendo que no es
+un BP, se salta el c&oacute;digo que limpia BSS y entonces entra en
+<CODE>initialize_secondary()</CODE>, el cual justamente entra en la tarea
+vac&iacute;a para esta CPU - recalcar que <CODE>init_tasks[cpu]</CODE> ya hab&iacute;a
+sido inicializada por el BP ejecutando <CODE>do_boot_cpu(cpu)</CODE>. </P>
+<P>Destacar que init_task puede ser compartido, pero cada hilo vac&iacute;o debe de
+tener su propio TSS. Este es el motivo por el que
+<CODE>init_tss[NR_CPUS]</CODE> es una array.</P>
+
+<H2><A NAME="ss1.8">1.8</A> <A HREF="dentro-nucleo-linux.html#toc1.8">Liberando datos y c&oacute;digo de inicializaci&oacute;n</A>
+</H2>
+
+
+<P>Cuando el sistema operativo se inicializa a si mismo, la mayor&iacute;a del
+c&oacute;digo y estructuras de datos no se necesitar&aacute;n otra vez. La mayor&iacute;a
+de los sistemas operativos (BSD, FreeBSD, etc.) no pueden deshacerse de
+esta informaci&oacute;n innecesaria, gastando entonces valiosa memoria
+f&iacute;sica del n&uacute;cleo. El motivo que ellos no lo realizan (ver el libro de
+McKusick 4.4BSD) es que "el c&oacute;digo relevante est&aacute; propagado a trav&eacute;s
+de varios subsistemas y por lo tanto no es factible liberarlo". Linux,
+por supuesto, no puede usar tal escusa porque bajo Linux "si en principio
+algo es posible, entonces ya est&aacute; implementado o alguien est&aacute;
+trabajando en ello".</P>
+<P>Por lo tanto, como he dicho anteriormente, el n&uacute;cleo Linux s&oacute;lo puede
+ser compilado como un binario ELF, y ahora adivinamos el motivo (o uno
+de los motivos) para ello. El motivo referente a deshechar el c&oacute;digo/datos
+de inicializaci&oacute;n es que Linux suministra dos macros para ser usadas:</P>
+<P>
+<UL>
+<LI> <CODE>__init</CODE> - para el c&oacute;digo de inicializaci&oacute;n</LI>
+<LI> <CODE>__initdata</CODE> - para datos</LI>
+</UL>
+</P>
+<P>Estas eval&uacute;an al atributo especificador gcc (tambi&eacute;n conocido como
+"gcc magic") tal como ha sido definido en <CODE>include/linux/init.h</CODE>:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+#ifndef MODULE
+#define __init        __attribute__ ((__section__ (".text.init")))
+#define __initdata    __attribute__ ((__section__ (".data.init")))
+#else
+#define __init
+#define __initdata
+#endif
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Lo que esto significa es que si el c&oacute;digo es compilado est&aacute;ticamente
+en el n&uacute;cleo (MODULO no est&aacute; definido), entonces es colocado en
+la secci&oacute;n especial ELF <CODE>.text.init</CODE>, el cual es declarado en el
+mapa del enlazado en <CODE>arch/i386/vmlinux.lds</CODE>. En caso contrario
+(si es un m&oacute;dulo) las macros no eval&uacute;an nada.</P>
+<P>Lo que pasa durante el arranque es que el hilo del n&uacute;cleo "init"
+(funci&oacute;n <CODE>init/main.c:init()</CODE>) llama a la funci&oacute;n espec&iacute;fica
+de la arquitectura <CODE>free_initmem()</CODE> la cual libera todas las
+p&aacute;ginas entre las direcciones <CODE>__init_begin</CODE> e
+<CODE>__init_end</CODE>.</P>
+<P>En un sistema t&iacute;pico (mi estaci&oacute;n de trabajo), esto resulta en la
+liberaci&oacute;n de unos 260K de memoria.</P>
+<P>Las funciones registradas a trav&eacute;s de <CODE>module_init()</CODE> son
+colocadas en <CODE>.initcall.init</CODE> el cual es tambi&eacute;n liberado en el
+caso est&aacute;tico. La actual tendencia en Linux, cuando se est&aacute; dise&ntilde;ando
+un subsistema (no necesariamente un m&oacute;dulo), es suministrar puntos
+de entrada init/exit desde las etapas tempranas del dise&ntilde;o para que en
+el futuro, el subsistema en cuesti&oacute;n, pueda ser modularizado si se
+necesita. Un ejemplo de esto es pipefs, ver <CODE>fs/pipe.c</CODE>. Incluso
+si un subsistema nunca fuese convertido a m&oacute;dulo, ej. bdflush (ver
+<CODE>fs/buffer.c</CODE>), a&uacute;n es bonito y arreglado usar la macro
+<CODE>module_init()</CODE> contra su funci&oacute;n de inicializaci&oacute;n,
+suministrada aunque no haga nada cuando la funci&oacute;n es precisamente
+llamada.</P>
+<P>Hay dos macros m&aacute;s, las cuales trabajan de una manera similar, llamadas
+<CODE>__exit</CODE> y <CODE>__exitdata</CODE>, pero ellas est&aacute;n m&aacute;s
+directamente conectadas al soporte de m&oacute;dulos por lo que ser&aacute;n
+explicadas en una secci&oacute;n posterior.</P>
+
+<H2><A NAME="ss1.9">1.9</A> <A HREF="dentro-nucleo-linux.html#toc1.9">Procesando la linea de comandos del n&uacute;cleo</A>
+</H2>
+
+
+<P>D&eacute;janos recalcar qu&eacute; es lo que le pasa a la linea de comandos 
+cuando se le pasa al n&uacute;cleo durante el arranque:</P>
+<P>
+<OL>
+<LI> LILO (o BCP) acepta la linea de comandos usando los servicios de
+teclado de la BIOS y los almacena en una localizaci&oacute;n bien
+conocida en la memoria f&iacute;sica, tambi&eacute;n como una firma
+diciendo que all&iacute; existe una linea de comando v&aacute;lida.
+</LI>
+<LI> <CODE>arch/i386/kernel/head.S</CODE> copia los primeros 2k de ella
+fuera de la p&aacute;gina cero. N&oacute;tese que la actual versi&oacute;n de
+LILO (21) corta la linea de comandos a los 79 bytes. Esto es un
+fallo no trivial en LILO (cuando el soporte para EBDA grandes
+est&aacute; activado) y Werner prometi&oacute; arreglarlo pr&oacute;ximamente.
+Si realmente necesitas pasarle lineas de comando m&aacute;s grandes de
+los 79 bytes, entonces puedes usar BCP o codificar tu linea
+de comandos en la funci&oacute;n
+<CODE>arch/i386/kernel/setup.c:parse_mem_cmdline()</CODE>.
+</LI>
+<LI> <CODE>arch/i386/kernel/setup.c:parse_mem_cmdline()</CODE> (llamada
+por <CODE>setup_arch()</CODE>, y esta llamada por
+<CODE>start_kernel()</CODE>) copia 256 bytes de la p&aacute;gina cero a
+<CODE>saved_command_line</CODE> la cual es mostrada por
+<CODE>/proc/cmdline</CODE>. Esta misma rutina procesa la opci&oacute;n
+"mem=" si est&aacute; presente y realiza los ajustes apropiados en los
+par&aacute;metros de la VM.
+</LI>
+<LI> Volvemos a la l&iacute;nea de comandos en <CODE>parse_options()</CODE>
+(llamada por <CODE>start_kernel()</CODE>) el cual procesa algunos
+par&aacute;metros "dentro del n&uacute;cleo" (actualmente "init=" y
+entorno/argumentos para init) y pasa cada palabra a
+<CODE>checksetup()</CODE>.
+</LI>
+<LI> <CODE>checksetup()</CODE> va a trav&eacute;s del c&oacute;digo en la secci&oacute;n ELF
+<CODE>.setup.init</CODE> y llama a cada funci&oacute;n, pas&aacute;ndole la
+palabra si corresponde. N&oacute;tese que usando el valor de retorno
+de 0 desde la funci&oacute;n registrada a trav&eacute;s de <CODE>__setup()</CODE>,
+es posible pasarle el mismo "variable=value" a m&aacute;s de una
+funci&oacute;n con el "value" inv&aacute;lido a una y v&aacute;lido a otra.
+Jeff Garzik coment&oacute;: "los hackers que hacen esto son buenos :)"
+¿Por qu&eacute;? Porque esto es claramente espec&iacute;fico del orden de
+enlazado, esto es, el enlazado del n&uacute;cleo en un orden tendr&aacute; a la
+llamada de la funci&oacute;nA antes de la funci&oacute;nB y otro los tendr&aacute;
+en orden inverso, con el resultado dependiendo del orden.</LI>
+</OL>
+</P>
+<P>Por lo tanto, ¿c&oacute;mo debemos de escribir el c&oacute;digo que procesa la linea
+de comandos del arranque? Nosotros usamos la macro <CODE>__setup()</CODE>
+definida en <CODE>include/linux/init.h</CODE>:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+
+/*
+ * Usado por la configuraci&oacute;n de par&aacute;metros de la l&iacute;nea de comandos
+ * del n&uacute;cleo
+ */
+struct kernel_param {
+        const char *str;
+        int (*setup_func)(char *);
+};
+
+extern struct kernel_param __setup_start, __setup_end;
+
+#ifndef MODULE
+#define __setup(str, fn) \
+   static char __setup_str_##fn[] __initdata = str; \
+   static struct kernel_param __setup_##fn __initsetup = \
+   { __setup_str_##fn, fn }
+
+#else
+#define __setup(str,func) /* nada */
+endif
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Por lo tanto, t&iacute;picamente la usar&aacute;s en tu c&oacute;digo de esta forma (tomado
+del c&oacute;digo del controlador real, BusLogic HBA
+<CODE>drivers/scsi/BusLogic.c</CODE>): </P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+static int __init
+BusLogic_Setup(char *str)
+{
+        int ints[3];
+
+        (void)get_options(str, ARRAY_SIZE(ints), ints);
+
+        if (ints[0] != 0) {
+                BusLogic_Error("BusLogic: Obsolete Command Line Entry "
+                                "Format Ignored\n", NULL);
+                return 0;
+        }
+        if (str == NULL || *str == '\0')
+                return 0;
+        return BusLogic_ParseDriverOptions(str);
+}
+
+__setup("BusLogic=", BusLogic_Setup);
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Destacar que <CODE>__setup()</CODE> no hace nada por los m&oacute;dulos, por lo
+tanto el c&oacute;digo que quiere procesar la linea de comandos del arranque, que puede
+ser un m&oacute;dulo o estar est&aacute;ticamente enlazado, debe de ser
+llamado pas&aacute;ndole la funci&oacute;n manualmente en la rutina de inicializaci&oacute;n
+del m&oacute;dulo. Esto tambi&eacute;n significa que es posible escribir c&oacute;digo
+que procese los par&aacute;metros cuando es compilado como un m&oacute;dulo pero no
+cuando es est&aacute;tico o viceversa.</P>
+
+<HR>
+<A HREF="dentro-nucleo-linux-2.html">Página siguiente</A>
+Página anterior
+<A HREF="dentro-nucleo-linux.html#toc1">Índice general</A>
+</BODY>
+</HTML>

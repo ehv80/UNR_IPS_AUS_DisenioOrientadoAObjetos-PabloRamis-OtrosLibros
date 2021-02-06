@@ -1,0 +1,1920 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<HTML>
+<HEAD>
+ <META NAME="GENERATOR" CONTENT="LinuxDoc-Tools 0.9.21">
+ <TITLE>Dentro del n&uacute;cleo Linux 2.4: Mecanismos IPC</TITLE>
+ <LINK HREF="dentro-nucleo-linux-6.html" REL=next>
+ <LINK HREF="dentro-nucleo-linux-4.html" REL=previous>
+ <LINK HREF="dentro-nucleo-linux.html#toc5" REL=contents>
+</HEAD>
+<BODY>
+<A HREF="dentro-nucleo-linux-6.html">Página siguiente</A>
+<A HREF="dentro-nucleo-linux-4.html">Página anterior</A>
+<A HREF="dentro-nucleo-linux.html#toc5">Índice general</A>
+<HR>
+<H2><A NAME="s5">5.</A> <A HREF="dentro-nucleo-linux.html#toc5">Mecanismos IPC</A></H2>
+
+<P>Este cap&iacute;tulo describe los mecanismos IPC sem&aacute;foro, memoria compartida
+y cola de mensajes tal como han sido implementados en el n&uacute;cleo Linux 2.4.
+Est&aacute; organizado en 4 secciones. Las tres primeras secciones cubren las
+interfaces y las funciones de soporte para 
+<A HREF="#semaphores">semaphores</A>, 
+<A HREF="#message">message queues</A>, y
+<A HREF="#sharedmem">shared memory</A> respectivamente. La secci&oacute;n
+<A HREF="#ipc_primitives">last</A> describe un conjunto de funciones
+comunes y estructuras de datos que son compartidas por los tres
+mecanismos.</P>
+
+<H2><A NAME="semaphores"></A> <A NAME="ss5.1">5.1</A> <A HREF="dentro-nucleo-linux.html#toc5.1">Sem&aacute;foros</A>
+</H2>
+
+<P>Las funciones descritas en esta secci&oacute;n implementan el nivel de usuario
+de los mecanismos de los sem&aacute;foros. N&oacute;tese que esta implementaci&oacute;n
+ayuda en el uso de los spinlocks y sem&aacute;foros del
+n&uacute;cleo. Para eliminar esta confusi&oacute;n el t&eacute;rmino "sem&aacute;foro del
+n&uacute;cleo" ser&aacute; usado en referencia a los sem&aacute;foros del n&uacute;cleo. Todos
+los otros usos de la palabra "sem&aacute;foro" ser&aacute; una referencia a los
+sem&aacute;foros del nivel de usuario.</P>
+
+<H3><A NAME="sem_apis"></A> Interfaces de la Llamada al sistema de los Sem&aacute;foros</H3>
+
+
+
+<H3><A NAME="sys_semget"></A> sys_semget()</H3>
+
+<P>La llamada entera a sys_semget() es protegida por el sem&aacute;foro global
+del n&uacute;cleo 
+<A HREF="#struct_ipc_ids">sem_ids.sem</A></P>
+<P>En el caso donde un nuevo conjunto de sem&aacute;foros deben de ser creados,
+la funci&oacute;n 
+<A HREF="#newary">newary()</A>  es llamada para crear e
+inicializar un nuevo conjunto de sem&aacute;foros. La ID del nuevo conjunto es
+retornada al llamante.</P>
+<P>En el caso donde un valor de llave es suministrado por un conjunto de
+sem&aacute;foros existentes, 
+<A HREF="#ipc_findkey">ipc_findkey()</A>
+es llamado para buscar el correspondiente descriptor del sem&aacute;foro en el
+&iacute;ndice de la matriz. Los par&aacute;metros y los permisos del llamante son
+verificados antes de devolver la ID del conjunto de sem&aacute;foros.</P>
+<H3><A NAME="sys_semctl"></A> sys_semctl()</H3>
+
+<P>Para los comandos 
+<A HREF="#IPC_INFO_and_SEM_INFO">IPC_INFO</A>,
+<A HREF="#IPC_INFO_and_SEM_INFO">SEM_INFO</A>, y 
+<A HREF="#SEM_STAT">SEM_STAT</A>, 
+<A HREF="#semctl_nolock">semctl_nolock()</A> es llamado para realizar
+las funciones necesarias.</P>
+<P>Para los comandos 
+<A HREF="#GETALL">GETALL</A>, 
+<A HREF="#GETVAL">GETVAL</A>, 
+<A HREF="#GETPID">GETPID</A>,
+<A HREF="#GETNCNT">GETNCNT</A>, 
+<A HREF="#GETZCNT">GETZCNT</A>, 
+<A HREF="#IPC_STAT">IPC_STAT</A>, 
+<A HREF="#SETVAL">SETVAL</A>, y
+<A HREF="#SETALL">SETALL</A>, 
+<A HREF="#semctl_main">semctl_main()</A>
+es llamado para realizar las funciones necesarias.</P>
+<P>Para los comandos 
+<A HREF="#semctl_ipc_rmid">IPC_RMID</A>
+y 
+<A HREF="#semctl_ipc_set">IPC_SET</A>, 
+<A HREF="#semctl_down">semctl_down()</A> es llamada
+para realizar las funciones necesarias. Durante todas estas operaciones,
+es mantenido el sem&aacute;foro global del n&uacute;cleo 
+<A HREF="#struct_ipc_ids">sem_ids.sem</A>.</P>
+<H3><A NAME="sys_semop"></A> sys_semop()</H3>
+
+<P>Despu&eacute;s de validar los par&aacute;metros de la llamada, los datos de las
+operaciones de los sem&aacute;foros son copiados desde el espacio de usuario a
+una antememoria temporal. Si una peque&ntilde;a antememoria temporal es suficiente,
+entonces es usada una antememoria de pila. En otro caso, es asignad una antememoria
+m&aacute;s grande. Despu&eacute;s de copiar los datos de las operaciones de los
+sem&aacute;foros, el spinlock global de los sem&aacute;foros es cerrado, y la
+ID del conjunto de sem&aacute;foros especificado por el usuario es
+validado. Los permisos de acceso para el conjunto de sem&aacute;foros tambi&eacute;n
+son validados.</P>
+<P>Todas las operaciones de los sem&aacute;foros especificadas por el usuario son
+analizadas. Durante este proceso, es mantenida una cuenta para todas las
+operaciones que tienen la bandera SEM_UNDO establecida. Una bandera
+<CODE>decrease</CODE> es establecida si alguna de las operaciones quitan de
+un valor del sem&aacute;foro, y una bandera <CODE>alter</CODE> es establecida si
+alguno de los valores de los sem&aacute;foros es modificado (esto es,
+incrementados o decrementados). El n&uacute;mero de cada sem&aacute;foros a ser
+modificado es validado.</P>
+<P>Si SEM_UNDO estaba asertado para alguna de las operaciones del
+sem&aacute;foro, entonces la lista para deshacer la actual tarea es buscada
+por una estructura deshacer asociada con este conjunto de sem&aacute;foros.
+Durante esta b&uacute;squeda, si la ID del conjunto de sem&aacute;foros de alguna de
+las estructuras deshacer es encontrada ser&aacute; -1, entonces 
+<A HREF="#freeundos">freeundos()</A> es llamada para liberar la
+estructura deshacer y quitarla de la lista. Si no se encuentra
+ninguna estructura deshacer para este conjunto de sem&aacute;foros entonces
+<A HREF="#alloc_undo">alloc_undo()</A> es llamada para asignar e
+inicializar una.</P>
+<P>La funci&oacute;n 
+<A HREF="#try_atomic_semop">try_atomic_semop()</A> es
+llamada con el par&aacute;metro <CODE>do_undo</CODE> igual a 0 en orden de
+ejecutar la secuencia de operaciones. El valor de retorno indica si
+ambas operaciones han tenido &eacute;xito, han sido fallidas, o que no han sido ejecutadas
+porque necesitaban bloquear. Cada uno de estos casos son m&aacute;s
+ampliamente descritos a continuaci&oacute;n:</P>
+
+<H3><A NAME="Non-blocking_Semaphore_Operations"></A> Operaciones de sem&aacute;foros no bloqueantes</H3>
+
+
+<P>La funci&oacute;n 
+<A HREF="#try_atomic_semop">try_atomic_semop()</A>
+devuelve cero para indicar que todas las operaciones en la secuencia han
+sido realizadas con &eacute;xito. Es este caso, 
+<A HREF="#update_queue">update_queue()</A> es llamada para recorrer
+la cola de las operaciones pendientes del sem&aacute;foro para el conjunto del
+sem&aacute;foro y despertar cualquier tarea dormida que no necesite bloquear
+m&aacute;s. Esto completa la ejecuci&oacute;n de la llamada al sistema sys_semop()
+para este caso.</P>
+<H3><A NAME="Failing_Semaphore_Operations"></A> Operaciones de Sem&aacute;foro con fallos</H3>
+
+<P>Si 
+<A HREF="#try_atomic_semop">try_atomic_semop()</A> devuelve un
+valor negativo, entonces ha sido encontrada una condici&oacute;n de fallo.
+En este caso, ninguna de las operaciones han sido ejecutadas. 
+Esto ocurre cuando una operaci&oacute;n de un sem&aacute;foro causar&iacute;a un valor
+inv&aacute;lido del sem&aacute;foro, o un operaci&oacute;n marcada como IPC_NOWAIT es
+incapaz de completarse. La condici&oacute;n de error es retornada al llamante
+de sys_semop().</P>
+<P>Antes de que sys_semop() retorne, es hecha una llamada a
+<A HREF="#update_queue">update_queue()</A> para recorrer la cola
+de operaciones pendientes del sem&aacute;foro para el conjunto del sem&aacute;foro y
+despierta cualquier tarea dormida que no necesite m&aacute;s bloqueos.</P>
+<H3><A NAME="Blocking_Semaphore_Operations"></A> Operaciones de Sem&aacute;foro bloqueantes</H3>
+
+<P>La funci&oacute;n 
+<A HREF="#try_atomic_semop">try_atomic_semop()</A>
+devuelve un 1 para indicar que la secuencia de operaciones del sem&aacute;foro
+no fue ejecutada porque uno de los sem&aacute;foros bloquear&iacute;a. Para este
+caso, un nuevo elemento 
+<A HREF="#struct_sem_queue">sem_queue</A> es
+inicializado conteniendo estas operaciones del sem&aacute;foro. Si alguna de
+estas operaciones afectaran al estado del sem&aacute;foro, entonces un nuevo
+elemento de cola es a&ntilde;adido al final de la cola. En otro caso, el nuevo
+elemento es a&ntilde;adido al principio de la cola.</P>
+<P>El elemento <CODE>semsleeping</CODE> de la tarea actual est&aacute; establecido
+para indicar que la tarea est&aacute; durmiendo en este elemento 
+<A HREF="#struct_sem_queue">sem_queue</A>. La tarea actual es marcada
+como TASK_INTERRUPTIBLE, y el elemento <CODE>sleeper</CODE> del
+<A HREF="#struct_sem_queue">sem_queue</A> es establecido para
+identificar esta tarea por el durmiente. El spinlock global del
+sem&aacute;foro es entonces desbloqueado, y schedule() es llamado para poner
+la tarea actual a dormir.</P>
+<P>Cuando es despertada, la tarea vuelve a cerrar el spinlock global del
+sem&aacute;foro, determina por qu&eacute; fue despertada, y c&oacute;mo deber&iacute;a de
+responder. Los siguientes casos son manejados:</P>
+<P>
+<UL>
+<LI>  Si el conjunto de sem&aacute;foros ha sido borrado, entonces
+la llamada al sistema falla con EIDRM.
+</LI>
+<LI>    Si el elemento <CODE>status</CODE> de la estructura
+<A HREF="#struct_sem_queue">sem_queue</A> est&aacute; establecido
+a 1, entonces la tarea es despertada en orden a reintentar las
+operaciones del sem&aacute;foro, Otra llamada a 
+<A HREF="#try_atomic_semop">try_atomic_semop()</A> es
+realizada para ejecutar la secuencia de las operaciones del
+sem&aacute;foro. Si try_atomic_sweep() devuelve 1, entonces la tarea
+debe de bloquearse otra vez como se describi&oacute; anteriormente.
+En otro caso, se devuelve 0 en caso de &eacute;xito, o un 
+c&oacute;digo de error apropiado en caso de fallo.
+
+Antes de que sys_semop() regrese, current->semsleeping es
+limpiado, y 
+<A HREF="#struct_sem_queue">sem_queue</A> es
+borrado de la cola. Si alguna de las operaciones del sem&aacute;foro
+especificada eran operaciones alteradoras (incremento o
+decremento), entonces 
+<A HREF="#update_queue">update_queue()</A> es llamado
+para recorrer la cola de operaciones pendientes del sem&aacute;foro
+para el conjunto del sem&aacute;foro y despertar cualquier tarea
+dormida que no necesite bloquear m&aacute;s.
+</LI>
+<LI>    Si el elemento <CODE>status</CODE> de la estructura 
+<A HREF="#struct_sem_queue">sem_queue</A> NO est&aacute; establecida
+a 1, y el elemento 
+<A HREF="#struct_sem_queue">sem_queue</A>
+no ha sido quitado de la cola, entonces la tarea ha sido
+despertada por una interrupci&oacute;n. Es este caso, la llamada al
+sistema falla con EINTR. Antes de regresar, current->semsleeping 
+es limpiado, y 
+<A HREF="#struct_sem_queue">sem_queue</A> es
+borrado de la cola. Tambi&eacute;n 
+<A HREF="#update_queue">update_queue()</A> es llamado 
+si alguna de las operaciones eran operaciones alterantes.
+</LI>
+<LI>    Si el elemento  <CODE>status</CODE>  de la estructura
+<A HREF="#struct_sem_queue">sem_queue</A> NO est&aacute;
+establecido a 1, y el elemento
+<A HREF="#struct_sem_queue">sem_queue</A> ha sido quitado
+de la cola, entonces las operaciones del sem&aacute;foro ya han sido 
+ejecutadas por 
+<A HREF="#update_queue">update_queue()</A>.
+La cola <CODE>status</CODE>, la cual ser&aacute; 0 si se tiene &eacute;xito 
+o un c&oacute;digo negativo de error en caso de fallo, se convertir&aacute;
+en el valor de retorno de la llamada al sistema.
+</LI>
+</UL>
+</P>
+<H3><A NAME="sem_structures"></A> Estructuras Espec&iacute;ficas de Soporte de Sem&aacute;foros</H3>
+
+<P>Las siguientes estructuras son usadas espec&iacute;ficamente para el soporte
+de sem&aacute;foros:</P>
+
+<H3><A NAME="struct_sem_array"></A> struct sem_array</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+/* Una estructura de datos sem_array para cada conjunto de sem&aacute;foros en el sistema. */
+struct sem_array {
+    struct kern_ipc_perm sem_perm; /* permisos .. ver ipc.h */
+    time_t sem_otime; /* &uacute;ltimo tiempo de la operaci&oacute;n con el sem&aacute;foro */
+    time_t sem_ctime; /* &uacute;ltimo tiempo de cambio */
+    struct sem *sem_base; /* puntero al primer sem&aacute;foro en el array */
+    struct sem_queue *sem_pending; /* operaciones pendientes para ser procesadas  */
+    struct sem_queue **sem_pending_last; /* &uacute;ltima operaci&oacute;n pendiente */
+    struct sem_undo *undo; /* peticiones deshechas en este array * /
+    unsigned long sem_nsems; /* n&uacute;mero de sem&aacute;foros en el array */
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_sem"></A> struct sem</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+/* Una estructura de sem&aacute;foro para cada sem&aacute;foro en el sistema. */
+struct sem {
+        int     semval;         /* valor actual */
+        int     sempid;         /* pid de la &uacute;ltima operaci&oacute;n */
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_seminfo"></A> struct seminfo</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct  seminfo {
+        int semmap;
+        int semmni;
+        int semmns;
+        int semmnu;
+        int semmsl;
+        int semopm;
+        int semume;
+        int semusz;
+        int semvmx;
+        int semaem;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_semid64_ds"></A> struct semid64_ds</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct semid64_ds {
+        struct ipc64_perm sem_perm;             /* permisos.. ver ipc.h */
+        __kernel_time_t sem_otime;              /* &uacute;ltimo tiempo de operaci&oacute;n con el sem&aacute;foro */
+        unsigned long   __unused1;
+        __kernel_time_t sem_ctime;              /* &uacute;ltimo tiempo de cambio */
+        unsigned long   __unused2;
+        unsigned long   sem_nsems;              /* n&uacute;mero de sem&aacute;foros en la matriz */
+        unsigned long   __unused3;
+        unsigned long   __unused4;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_sem_queue"></A> struct sem_queue</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+/* Una cola para cada proceso durmiendo en el sistema. */
+struct sem_queue {
+        struct sem_queue *      next;    /* siguiente entrada en la cola */
+        struct sem_queue **     prev;    /* entrada anterior en la cola, *(q->prev) == q */
+        struct task_struct*     sleeper; /* este proceso */
+        struct sem_undo *       undo;    /* estructura deshacer */
+        int                     pid;     /* id del proceso del proceso pedido */
+        int                     status;  /* status de terminaci&oacute;n de la operaci&oacute;n  */
+        struct sem_array *      sma;     /* matriz de sem&aacute;foros para las operaciones */
+        int                     id;      /* id interna del sem&aacute;foro */
+        struct sembuf *         sops;    /* matriz de operaciones pendientes*/
+        int                     nsops;   /* n&uacute;mero de operaciones */
+        int                     alter;   /* operaciones que alterar&aacute;n el sem&aacute;foro  */
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_sembuf"></A> struct sembuf</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+/* las llamadas al sistema cogen una matriz de estas. */
+struct sembuf {
+        unsigned short  sem_num;        /* indice del sem&aacute;foro en la matriz */
+        short           sem_op;         /* operaci&oacute;n del sem&aacute;foro */
+        short           sem_flg;        /* banderas de la operaci&oacute;n */
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_sem_undo"></A> struct sem_undo</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+/* Cada tarea tiene una lista de peticiones de deshacer. Ellas son
+ * ejecutadas cuando el proceso sale.
+ */
+struct sem_undo {
+        struct sem_undo *       proc_next;      /* siguiente entrada en este proceso */
+        struct sem_undo *       id_next;        /* siguiente entrada en
+                                                este conjunto de sem&aacute;foros */
+        int                     semid;          /* identificador del
+                                                conjunto de sem&aacute;foros */
+        short *                 semadj;         /* matriz de ajustes, una
+                                                por sem&aacute;foro */
+
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="sem_primitives"></A> Funciones de Soporte de Sem&aacute;foros</H3>
+
+<P>Las siguientes funciones son usadas espec&iacute;ficamente para soportar los
+sem&aacute;foros:</P>
+
+<H3><A NAME="newary"></A> newary()</H3>
+
+<P>newary() conf&iacute;a en la funci&oacute;n 
+<A HREF="#ipc_alloc">ipc_alloc()</A>
+para asignar la memoria requerida para el nuevo conjunto de sem&aacute;foros.
+El asigna suficiente memoria para el conjunto de descriptores del
+sem&aacute;foro y para cada uno de los sem&aacute;foros en el conjunto. La memoria
+asignada es limpiada, y la direcci&oacute;n del primer elemento del conjunto
+de descriptores del sem&aacute;foro es pasada a 
+<A HREF="#ipc_addid">ipc_addid()</A>.
+<A HREF="#ipc_addid">ipc_addid()</A> reserva una entrada de la matriz
+para el conjunto de descriptores del sem&aacute;foro e inicializa los datos
+(
+<A HREF="#struct_kern_ipc_perm">struct kern_ipc_perm</A>) para el
+conjunto. La variavle global <CODE>used_sems</CODE> es actualizada por el
+n&uacute;mero de sem&aacute;foros en el nuevo conjunto y la inicializaci&oacute;n de los
+datos (
+<A HREF="#struct_kern_ipc_perm">struct kern_ipc_perm</A>) para
+el nuevo conjunto es completada. Otras inicializaciones realizadas para este conjunto
+son listadas a continuaci&oacute;n:</P>
+<P>
+<UL>
+<LI>  El elemento <CODE>sem_base</CODE> para el conjunto es inicializado
+a la direcci&oacute;n inmediatamente siguiente siguiendo la porci&oacute;n
+(
+<A HREF="#struct_sem_array">struct sem_array</A>) de los
+nuevos segmentos asignados. Esto corresponde a la localizaci&oacute;n
+del primer sem&aacute;foron en el conjunto.
+</LI>
+<LI>  La cola <CODE>sem_pending</CODE> es inicializada como vac&iacute;a.</LI>
+</UL>
+</P>
+<P>Todas las operaciones siguiendo la llamada a 
+<A HREF="#ipc_addid">ipc_addid()</A> son realizadas mientras se mantiene el spinlock
+global de los sem&aacute;foros. Despu&eacute;s de desbloquear el spinlock global de
+los sem&aacute;foros, newary() llama a 
+<A HREF="#ipc_buildid">ipc_buildid()</A> (a trav&eacute;s de sem_buildid()). Esta funci&oacute;n usa el
+&iacute;ndice del conjunto de descriptores del sem&aacute;foro para crear una &uacute;nica
+ID, que es entonces devuelta al llamador de newary().</P>
+<H3><A NAME="freeary"></A> freeary()</H3>
+
+<P>freeary() es llamada por 
+<A HREF="#semctl_down">semctl_down()</A> para
+realizar las funciones listadas a continuaci&oacute;n. Es llamada con el
+spinlock global de los sem&aacute;foros bloqueado y regresa con el spinlock
+desbloqueado.</P>
+<P>
+<UL>
+<LI>    La funci&oacute;n 
+<A HREF="#func_ipc_rmid">ipc_rmid()</A>  es
+llamada (a trav&eacute;s del envoltorio sem_rmid()) para borrar la
+ID del conjunto de sem&aacute;foros y para recuperar un puntero
+al conjunto de sem&aacute;foros.
+</LI>
+<LI>    La lista de deshacer para el conjunto de sem&aacute;foros es
+invalidada.
+</LI>
+<LI>    Todos los procesos pendientes son despertados y son 
+obligados a fallar con EIDRM.
+</LI>
+<LI>    EL n&uacute;mero de sem&aacute;foros usados es reducido con el n&uacute;mero de
+sem&aacute;foros en el conjunto borrado.
+</LI>
+<LI>    La memoria asociada con el conjunto de sem&aacute;foros es liberada.</LI>
+</UL>
+</P>
+<H3><A NAME="semctl_down"></A> semctl_down()</H3>
+
+<P>semctcl_down() suministra las operaciones 
+<A HREF="#semctl_ipc_rmid">IPC_RMID</A> y 
+<A HREF="#semctl_ipc_set">IPC_SET</A> de la
+llamada al sistema semctl(). La ID del conjunto de sem&aacute;foros y los
+permisos de acceso son verificadas en ambas operaciones, y en ambos
+casos, el spinlock global del sem&aacute;foro es mantenido a lo largo de la
+operaci&oacute;n. </P>
+
+<H3><A NAME="semctl_ipc_rmid"></A> IPC_RMID</H3>
+
+<P>La operaci&oacute;n IPC_RMID llama a 
+<A HREF="#freeary">freeary()</A> para
+borrar el conjunto del sem&aacute;foro.</P>
+<H3><A NAME="semctl_ipc_set"></A> IPC_SET</H3>
+
+<P>La operaci&oacute;n IPC_SET actualiza los elementos <CODE>uid</CODE>, <CODE>gid</CODE>,
+<CODE>mode</CODE>, y <CODE>ctime</CODE> del conjunto de sem&aacute;foros.</P>
+<H3><A NAME="semctl_nolock"></A> semctl_nolock()</H3>
+
+<P>semctl_nolock() es llamada por 
+<A HREF="#sys_semctl">sys_semctl()</A>
+para realizar las operaciones IPC_INFO, SEM_INFO y SEM_STAT.</P>
+
+<H3><A NAME="IPC_INFO_and_SEM_INFO"></A> IPC_INFO y SEM_INFO</H3>
+
+<P>IPC_INFO y SEM_INFO causan una antememoria temporal 
+<A HREF="#struct_seminfo">seminfo</A> para que sea inicializada y cargada con los datos
+estad&iacute;sticos sin cambiar del sem&aacute;foro, los elementos <CODE>semusz</CODE> y
+<CODE>semaem</CODE> de la estructura 
+<A HREF="#struct_seminfo">seminfo</A> son actualizados de acuerdo con el comando dado
+(IPC_INFO o SEM_INFO). El valor de retorno de las llamadas al sistema
+es establecido al conjunto m&aacute;ximo de IDs del conjunto de sem&aacute;foros.</P>
+<H3><A NAME="SEM_STAT"></A> SEM_STAT</H3>
+
+<P>SEM_STAT causa la inicializaci&oacute;n de la antememoria temporal 
+<A HREF="#struct_semid64_ds">semid64_ds</A>. El spinlock global del
+sem&aacute;foro es entonces mantenido mientras se copian los valores
+<CODE>sem_otime</CODE>, <CODE>sem_ctime</CODE>, y <CODE>sem_nsems</CODE> en la
+antememoria. Estos datos son entonces copiados al espacio de usuario.</P>
+<H3><A NAME="semctl_main"></A> semctl_main()</H3>
+
+<P>semctl_main() es llamado por 
+<A HREF="#sys_semctl">sys_semctl()</A>
+para realizar muchas de las funciones soportadas, tal como se describe
+en la secci&oacute;n posterior. Anteriormente a realizar alguna de las
+siguientes operaciones, semctl_main() cierra el spinlock global del
+sem&aacute;foro y valida la ID del conjunto de sem&aacute;foros y los permisos. El
+spinlock es liberado antes de retornar.</P>
+
+<H3><A NAME="GETALL"></A> GETALL</H3>
+
+<P>La operaci&oacute;n GETALL carga los actuales valores del sem&aacute;foro en una
+antememoria temporal del n&uacute;cleo y entonces los copia fuera del espacio de
+usuario. La peque&ntilde;a pila de antememoria es usada si el conjunto del sem&aacute;foro
+es peque&ntilde;o. En otro caso, el spinlock es temporalmente deshechado en
+orden de asignar una antememoria m&aacute;s grande. El spinlock es mantenido
+mientras se copian los valores del sem&aacute;foro en la antememoria temporal.</P>
+<H3><A NAME="SETALL"></A> SETALL</H3>
+
+<P>La operaci&oacute;n SETALL copia los valores del sem&aacute;foro desde el espacio
+de usuario en una antememoria temporal, y entonces en el conjunto del
+sem&aacute;foro. El spinlock es quitado mientras se copian los valores desde el
+espacio de usuario a la antememoria temporal, y mientras se verifican valores
+razonables. Si el conjunto del sem&aacute;foro es peque&ntilde;o, entonces una pila de
+antememoria es usada, en otro caso una antememoria m&aacute;s grande es asignado. El
+spinlock es recuperado y mantenido mientras las siguientes operaciones
+son realizadas en el conjunto del sem&aacute;foro:</P>
+<P>
+<UL>
+<LI>    Los valores del sem&aacute;foro son copiados en el conjunto del
+sem&aacute;foro.
+</LI>
+<LI>    Los ajustes del sem&aacute;foron de la cola de deshacer para el
+conjunto del sem&aacute;foro son limpiados.
+</LI>
+<LI>    El valor <CODE>sem_ctime</CODE> para el conjunto de sem&aacute;foros
+es establecido.
+</LI>
+<LI>    La funci&oacute;n 
+<A HREF="#update_queue">update_queue()</A>
+es llamada para recorrer la cola de semops
+(operaciones del sem&aacute;foro)  pendientes y 
+mirar por alguna tarea que pueda ser completada como un 
+resultado de la operaci&oacute;n SETALL. Cualquier tarea pendiente
+que no sea m&aacute;s bloqueada es despertada.</LI>
+</UL>
+</P>
+<H3><A NAME="IPC_STAT"></A> IPC_STAT</H3>
+
+<P>En la operaci&oacute;n IPC_STAT, los valores <CODE>sem_otime</CODE>,
+<CODE>sem_ctime</CODE>, y <CODE>sem_nsems</CODE> son copiados en una pila de
+antememoria. Los datos son entonces copiados al espacio de usuario despu&eacute;s
+de tirar con el spinlock.</P>
+<H3><A NAME="GETVAL"></A> GETVAL</H3>
+
+<P>Para GETVALL en el caso de no error, el valor de retorno para la llamada
+al sistema es establecido al valor del sem&aacute;foro especificado.</P>
+<H3><A NAME="GETPID"></A> GETPID</H3>
+
+<P>Para GETPID en el caso de no error, el valor de retorno para la llamada
+al sistema es establecido al <CODE>pid</CODE> asociado con las &uacute;ltima
+operaci&oacute;n del sem&aacute;foro.</P>
+<H3><A NAME="GETNCNT"></A> GETNCNT</H3>
+
+<P>Para GETNCNT en el caso de no error, el valor de retorno para la llamada
+al sistema de establecido al n&uacute;mero de procesos esperando en el
+sem&aacute;foro siendo menor que cero. Este n&uacute;mero es calculado por la funci&oacute;n
+<A HREF="#count_semncnt">count_semncnt()</A>. </P>
+<H3><A NAME="GETZCNT"></A> GETZCNT</H3>
+
+<P>Para GETZCNT en la caso de no error, el valor de retorno para la llamada
+al sistema es establecido al n&uacute;mero de procesos esperando en el
+sem&aacute;foro estando establecido a cero. Este n&uacute;mero es calculado por la
+funci&oacute;n 
+<A HREF="#count_semzcnt">count_semzcnt()</A>.</P>
+<H3><A NAME="SETVAL"></A> SETVAL</H3>
+
+
+<P>Despu&eacute;s de validar el nuevo valor del sem&aacute;foro, las siguientes
+funciones son realizadas:</P>
+<P>
+<UL>
+<LI>    La cola de deshacer es buscada para cualquier ajuste en este
+sem&aacute;foro. Cualquier ajuste que sea encontrado es reinicializado
+a cero.
+</LI>
+<LI>    El valor del sem&aacute;foro es establecido al valor suministrado.
+</LI>
+<LI>    El valor del sem&aacute;foro <CODE>sem_ctime</CODE> para el conjunto
+del sem&aacute;foro es actualizado.
+</LI>
+<LI>    La funci&oacute;n 
+<A HREF="#update_queue">update_queue()</A> es
+llamada para recorrer la cola de semops (operaciones del sem&aacute;foro)
+pendientes y buscar
+a cualquier tarea que pueda ser completada como resultado de la 
+operaci&oacute;n 
+<A HREF="#SETALL">SETALL</A>. Cualquier tarea que
+no vaya a ser m&aacute;s bloqueada es despertada.
+</LI>
+</UL>
+</P>
+<H3><A NAME="count_semncnt"></A> count_semncnt()</H3>
+
+<P>count_semncnt() cuenta el n&uacute;mero de tareas esperando por el valor del
+sem&aacute;foro para que sea menor que cero.</P>
+<H3><A NAME="count_semzcnt"></A> count_semzcnt()</H3>
+
+<P>count_semzcnt() cuenta el n&uacute;mero de tareas esperando por el valor del
+sem&aacute;foro para que sea cero.</P>
+<H3><A NAME="update_queue"></A> update_queue()</H3>
+
+<P>update_queue() recorre la cola de semops pendientes para un conjunto de un
+sem&aacute;foro y llama a 
+<A HREF="#try_atomic_semop">try_atomic_semop()</A> para determinar qu&eacute; secuencias de las
+operaciones de los sem&aacute;foros ser&aacute;n realizadas. Si el estado de la
+cola de elementos indica que las tareas bloqueadas ya han sido
+despertadas, entonces la cola de elementos es pasada por alto. Para los
+otros elementos de la cola, la bandera <CODE>q-alter</CODE> es pasada como
+el par&aacute;metro deshacer a 
+<A HREF="#try_atomic_semop">try_atomic_semop()</A>, indicando que cualquier operaci&oacute;n alterante
+deber&iacute;a de ser deshecha antes de retornar.</P>
+<P>Si la secuencia de operaciones bloquearan, entonces 
+update_queue() retornar&aacute; sin hacer ning&uacute;n cambio.</P>
+<P>Una secuencia de operaciones puede fallar si una de las operaciones de
+los sem&aacute;foros puede causar un valor inv&aacute;lido del sem&aacute;foro, o una
+operaci&oacute;n marcada como IPC_NOWAIT es incapaz de completarse. En este
+caso, la tarea que es bloqueada en la secuencia de las
+operaciones del sem&aacute;foro es despertada, y la cola de status es
+establecida con un c&oacute;digo de error apropiado. El elemento de la cola es
+tambi&eacute;n quitado de la cola.</P>
+<P>Si la secuencia de las operaciones no es alterante, entonces ellas
+deber&iacute;an de pasar un valor cero como par&aacute;metro deshacer a 
+<A HREF="#try_atomic_semop">try_atomic_semop()</A>.
+Si estas operaciones tienen &eacute;xito, entonces son consideradas completas y
+son borradas de la cola. La tarea bloqueada es despertada, y el elemento
+de la cola <CODE>status</CODE> es establecido para indicar el &eacute;xito.</P>
+<P>Si la secuencia de las operaciones pueden alterar los valores del
+sem&aacute;foro, pero puede tener &eacute;xito, entonces las tareas durmiendo que no
+necesiten ser m&aacute;s bloqueadas tienen que ser despertadas. La cola
+status es establecida a 1 para indicar que la tarea bloqueada ha sido
+despertada. Las operaciones no han sido realizadas, por lo tanto el
+elemento de la cola no es quitado de la cola. Las operaciones del
+sem&aacute;foro ser&aacute;n ejecutadas por la tarea despertada.</P>
+<H3><A NAME="try_atomic_semop"></A> try_atomic_semop()</H3>
+
+<P>try_atomic_semop() es llamada por 
+<A HREF="#sys_semop">sys_semop()</A> y 
+<A HREF="#update_queue">update_queue()</A> para
+determinar si una secuencia de operaciones del sem&aacute;foro tendr&aacute;n &eacute;xito.
+El determina esto intentando realizar cada una de las operaciones.</P>
+<P>Si una operaci&oacute;n bloqueante es encontrada, entonces el proceso es
+abortado y todas los operaciones son deshechas. -EAGAIN es devuelto si
+IPC_NOWAIT es establecido. En otro caso, es devuelto 1 para indicar que
+la secuencia de las operaciones del sem&aacute;foro est&aacute; bloqueada.</P>
+<P>Si un valor del sem&aacute;foro es ajustado m&aacute;s alla de los l&iacute;mites del
+sistema, entonces todas las operaciones son deshechas, y -ERANGE es
+retornado.</P>
+<P>Si todas las operaciones de la secuencia tienen &eacute;xito, y el par&aacute;metro
+<CODE>do_undo</CODE> no es cero, entonces todas las operaciones son
+deshechas, y 0 es devuelto. Si el par&aacute;metro <CODE>do_undo</CODE> es cero,
+entonces todas las operaciones tienen &eacute;xito y contin&uacute;an obligadas, y el
+<CODE>sem_otime</CODE>, campo del conjunto de sem&aacute;foros es actualizado.</P>
+<H3><A NAME="sem_revalidate"></A> sem_revalidate()</H3>
+
+<P>sem_revalidate() es llamado cuando el spinlock global del sem&aacute;foro ha
+sido temporalmente tirado y necesita ser bloqueado otra vez. Es llamado
+por 
+<A HREF="#semctl_main">semctl_main()</A> y 
+<A HREF="#alloc_undo">alloc_undo()</A>. Valida la ID del sem&aacute;foro y los permisos, y si
+tiene &eacute;xito retorna con el spinlock global de los sem&aacute;foros bloqueado.</P>
+<H3><A NAME="freeundos"></A> freeundos()</H3>
+
+<P>freeundos() recorre las lista de procesos por deshacer en busca de la
+estructura deshacer deseada. Si es encontrada, la estructura deshacer es
+quitada de la lista y liberada. Un puntero a la siguiente estructura
+deshacer en la lista de procesos es devuelta.</P>
+<H3><A NAME="alloc_undo"></A> alloc_undo()</H3>
+
+<P>alloc_undo() espera ser llamada con el spinlock global de los sem&aacute;foros
+cerrado. En el caso de un error, regresa con &eacute;l desbloqueado.</P>
+<P>El spinlock global de los sem&aacute;foros es desbloqueado, y kmallock() es
+llamado para asignar suficiente memoria para la estructura 
+<A HREF="#struct_sem_undo">sem_undo</A>, y tambi&eacute;n para un array de
+uno de los valores de ajuste para cada sem&aacute;foro en el conjunto. Si
+tiene &eacute;xito, el spinlock es recuperado con una llamada a 
+<A HREF="#sem_revalidate">sem_revalidate()</A>.</P>
+<P>La nueva estructura semundo es entonces inicializada, y la direcci&oacute;n de
+esta estructura es colocada en la direcci&oacute;n suministrada por el
+llamante. La nueva estructura deshacer es entonces colocada en la cabeza
+de la lista deshacer para la actual tarea.</P>
+<H3><A NAME="sem_exit"></A> sem_exit()</H3>
+
+<P>sem_exit() es llamada por do_exit(), y es la responsable de ejecutar
+todos los ajustes deshacer para la tarea saliente.</P>
+<P>Si el actual proceso fue bloqueado en un sem&aacute;foro, entonces es borrado
+desde la lista 
+<A HREF="#struct_sem_queue">sem_queue</A> mientras se
+mantiene el spinlock global de los sem&aacute;foros.</P>
+<P>La lista deshacer para la actual tarea es entonces recorrida, y las
+siguientes operaciones son realizadas mientras se mantienen y liberan
+los spinlocks globales de los sem&aacute;foros a lo largo del procesamiento de
+cada elemento de la lista. Las siguientes operaciones son realizadas
+para cada uno de los elementos deshacer:</P>
+<P>
+<UL>
+<LI>    La estructura deshacer y la ID del conjunto del sem&aacute;foro son 
+validadas.</LI>
+<LI>    La lista deshacer del correspondiente conjunto de sem&aacute;foros es
+buscada para encontrar una referencia a la misma estructura
+deshacer y para quitarla de esa lista.</LI>
+<LI>    Los ajustes indicadores en la estructura deshacer son aplicados
+al conjunto de sem&aacute;foros.</LI>
+<LI>    El par&aacute;metro <CODE>sem_otime</CODE> del conjunto de sem&aacute;foros es
+actualizado.</LI>
+<LI>    
+<A HREF="#update_queue">update_queue()</A> es llamado para
+recorrer la cola de las semops pendientes y despertar cualquier
+tarea durmiento que no necesite ser bloqueada como resultado de
+la operaci&oacute;n deshacer.</LI>
+<LI>  La estructura deshacer es liberada.</LI>
+</UL>
+</P>
+<P>Cuando el procesamiento de la lista est&aacute; completo, el valor
+current->semundo es limpiado. </P>
+<H2><A NAME="message"></A> <A NAME="ss5.2">5.2</A> <A HREF="dentro-nucleo-linux.html#toc5.2">Colas de Mensajes</A>
+</H2>
+
+
+<H3><A NAME="Message_System_Call_Interfaces"></A> Interfaces de las llamadas al sistema de Colas</H3>
+
+
+<H3><A NAME="sys_msgget"></A> sys_msgget()</H3>
+
+<P>La llamada entera a sys_msgget() es protegida por el sem&aacute;foro global de
+la cola de mensajes (
+<A HREF="#struct_ipc_ids">msg_ids.sem</A>).</P>
+<P>En el caso donde una nueva cola de mensajes tiene que ser creada, la
+funci&oacute;n 
+<A HREF="#newque">newque()</A> es llamada para crear e
+inicializar una nueva cola de mensajes, y la nueva ID de la cola es
+devuelta al llamante.</P>
+<P>Si un valor llave es suministrado para una cola de mensajes existente,
+entonces 
+<A HREF="#ipc_findkey">ipc_findkey()</A> es llamada para
+mirar el &iacute;ndice correspondiente en la matriz de colas globales de
+descriptores de mensajes (msg_ids.entries). Los par&aacute;metros y los
+permisos del llamante son verificados antes de devolver la ID de la cola
+de mensajes. Las operaci&oacute;nes de b&uacute;squeda y verificaci&oacute;n son
+realizadas mientras el spinlock global de la cola de mensajes
+(msg_ids.ary) es mantenido.</P>
+<H3><A NAME="sys_msgctl"></A> sys_msgctl()</H3>
+
+<P>Los par&aacute;metros pasados a sys_msgctl() son: una ID de una cola de
+mensajes (<CODE>msqid</CODE>), la operaci&oacute;n (<CODE>cmd</CODE>), y un puntero
+al espacio de la antememoria 
+<A HREF="#struct_msqid_ds">msgid_ds</A>
+del tipo (<CODE>buf</CODE>). Seis operaciones son suministradas en esta
+funci&oacute;n: IPC_INFO, MSG_INFO,IPC_STAT, MSG_STAT, IPC_SET y IPC_RMID. 
+La ID de la cola de mensajes y los par&aacute;metros de la operaci&oacute;n son
+validados; entonces, la operaci&oacute;n (cmd) es realizada como sigue:</P>
+
+<H3><A NAME="msgctl_IPCINFO"></A> IPC_INFO (o MSG_INFO)</H3>
+
+<P>La informaci&oacute;n de la cola global de mensajes es copiada al espacio de
+usuario.</P>
+<H3><A NAME="msgctl_IPCSTAT"></A> IPC_STAT (o MSG_STAT)</H3>
+
+<P>Una antememoria temporal del tipo 
+<A HREF="#struct_msqid64_ds">struct msqid64_ds</A> es inicializado y el spinlock de la cola de mensajes
+global es cerrado. Despu&eacute;s de verificar los permisos de acceso del 
+proceso llamante, la informaci&oacute;n de la cola de mensajes asociada con
+la ID de la cola de mensajes es cargada en una antememoria temporal, el
+spinlock de la cola de mensajes global es abierto, y los contenidos de la
+antememoria temporal son copiados fuera del espacio de usuario por
+<A HREF="#copy_msqid_to_user">copy_msqid_to_user()</A>.</P>
+
+<H3><A NAME="msgctl_IPCSET"></A> IPC_SET</H3>
+
+<P>Los datos del usuario son copiados a trav&eacute;s de
+<A HREF="#copy_msqid_to_user">copy_msqid_to_user()</A>. El sem&aacute;foro
+de la cola de mensajes global y el spinlock son obtenidos y liberados al
+final. Despu&eacute;s de que la ID de la cola de mensajes y los permisos de
+acceso del actual proceso hayan sido validados, la informaci&oacute;n de la
+cola de mensajes es actualizada con los datos suministrados por el
+usuario, Despu&eacute;s, 
+<A HREF="#expunge_all">expunge_all()</A> y
+<A HREF="#ss_wakeup">ss_wakeup()</A> son llamadas para despertar
+todos los procesos durmiendo en las colas de espera del emisor y del
+receptor de las colas de mensajes. Esto es el motivo por el que algunos receptores
+quiz&aacute;s sean ahora excluidos por permisos de acceso estrictos y alguno
+de los emisores sean capaces ahora de enviar el mensaje debido a un
+incremento del tama&ntilde;o de la cola.</P>
+<H3><A NAME="msgctl_IPCRMID"></A> IPC_RMID</H3>
+
+<P>El sem&aacute;foro de la cola de mensajes global es obtenido y el spinlock global de
+la cola de mensajes es cerrado. Despu&eacute;s de validar la ID de la
+cola de mensajes y los permisos de acceso de la actual tarea, 
+<A HREF="#freeque">freeque()</A> es llamado para liberar los recursos
+relacionados con la ID de la cola de mensajes. El sem&aacute;foro de la cola
+de mensajes global y el spinlock son liberados.</P>
+<H3><A NAME="sys_msgsnd"></A> sys_msgsnd()</H3>
+
+<P>sys_msgsnd() recibe como par&aacute;metros una ID de una cola de mensajes
+(<CODE>msqid</CODE>), un puntero a la antememoria del tipo 
+<A HREF="#struct_msg_msg">struct msg_msg</A> (<CODE>msgp</CODE>), el tama&ntilde;o del mensaje a ser
+enviado (<CODE>msgsz</CODE>), y una bandera indicando esperar o no esperar
+(<CODE>msgflg</CODE>). Hay dos tareas esperando las colas y un mensaje
+esperando la cola asociada con la ID de la cola de mensajes. Si hay una
+nueva tarea en la cola de espera del receptor que est&aacute; esperando por 
+este mensaje, entonces el mensaje es enviado directamente al
+receptor. En otro caso, si hay suficiente espacio disponible en la cola de
+espera de mensajes, el mensaje es guardado en esta cola. Como &uacute;ltimo
+recurso, la tarea emisora se encola a si misma en la cola de espera del
+emisor. Una discusi&oacute;n con m&aacute;s profundidad de las operaciones
+realizadas por sys_msgsnd() es la siguiente: </P>
+<P>
+<OL>
+<LI>    Valida la direcci&oacute;n de la antememoria del usuario y el tipo de mensaje,
+entonces invoca a 
+<A HREF="#load_msg">load_msg()</A> para
+cargar el contenido del mensaje del usuario en un objeto
+temporal <CODE>
+<A NAME="msg"></A> msg</CODE> del tipo
+<A HREF="#struct_msg_msg">struct msg_msg</A>.
+El tipo de mensaje y los campos del tama&ntilde;o del mensaje de
+<CODE>msg</CODE> tambi&eacute;n son inicializados.</LI>
+<LI>  Cierra el spinlock global de la cola de mensajes y coge el 
+descriptor asociado con la cola de mensajes con la ID de 
+la cola de mensajes. Si dicha cola de mensajes no existe, 
+retorna EINVAL.</LI>
+<LI>
+<A NAME="sndretry"></A> 
+Invoca a 
+<A HREF="#ipc_checkid">ipc_checkid()</A>
+(a trav&eacute;s de msg_checkid()) para verificar que la ID de 
+la cola de mensajes es v&aacute;lida y llama a 
+<A HREF="#ipcperms">ipcperms()</A> para chequear los
+permisos de acceso de proceso llamante.</LI>
+<LI>    Chequea el tama&ntilde;o del mensaje y el espacio que sobra en
+la cola de espera de mensajes para ver si hay suficiente espacio
+para almacenar el mensaje. Si no, los siguiens subpasos son
+realizados:
+<OL>
+<LI>    Si IPC_NOWAIT es especificado en <CODE>msgflg</CODE> el
+spinlock global de la cola de mensajes es abierto, los
+recursos de memoria para el mensaje son liberados, y
+EAGAIN es retornado.</LI>
+<LI>    Invoca a 
+<A HREF="#ss_add">ss_add()</A> para 
+encolar la actual tarea en la cola de espera del 
+emisor. Tambi&eacute;n abre al spinlock global de la cola de mensajes
+e invoca a schedule() para poner la actual
+tarea a dormir.</LI>
+<LI>    Cuando es despertado, obtiene el spinlock global otra
+vez y verifica que la ID de la cola de mensajes es
+todav&iacute;a v&aacute;lida. Si la ID de la cola de mensajes no es
+valida, ERMID es retornado.</LI>
+<LI>    Invoca 
+<A HREF="#ss_del">ss_del()</A> para quitar la 
+tarea emisora de la cola de espera del emisor. Si hay 
+alguna se&ntilde;al pendiente para la tarea, sys_msgsnd() abre
+el spinlock global, invoca a 
+<A HREF="#free_msg">free_msg()</A> para liberar la antememoria del mensaje, y
+retorna EINTR. En otro caso, la funci&oacute;n va a 
+<A HREF="#sndretry">back</A> para chequear otra vez
+cuando hay otra vez suficiente sitio en la cola de 
+espera de mensajes.</LI>
+</OL>
+</LI>
+<LI>    Invoca 
+<A HREF="#pipelined_send">pipelined_send()</A>
+para intentar enviar el mensaje a la cola receptora
+directamente.</LI>
+<LI>    Si no hay receptores esperando por este mensaje, desencola
+<CODE>msg</CODE> en la cola de mensajes esperando (msq->q_messages).
+Actualiza los campos <CODE>q_cbytes</CODE> y <CODE>q_qnum</CODE>
+del descriptor de la cola de mensajes, al igual que las
+variables globales <CODE>msg_bytes</CODE> y <CODE>msg_hdrs</CODE>,
+las cuales indican el n&uacute;mero de bytes total usados por los
+mensajes y el n&uacute;mero total de mensajes a lo largo del sistema.</LI>
+<LI>    Si el mensaje ha sido enviado con &eacute;xito o encolado, actualiza
+los campos <CODE>q_lspid</CODE> y <CODE>q_stime</CODE> del descriptor
+de la cola de mensajes y abre el spinlock de colas de mensajes
+global.</LI>
+</OL>
+</P>
+<H3><A NAME="sys_msgrcv"></A> sys_msgrcv()</H3>
+
+<P>La funci&oacute;n sys_msgrcv() recibe como par&aacute;metro una ID de una cola de
+mensajes (<CODE>msqid</CODE>), un puntero a una antememoria del tipo 
+<A HREF="#struct_msg_msg">msg_msg</A> (<CODE>msgp</CODE>), el tama&ntilde;o del
+mensaje deseado (<CODE>msgsz</CODE>), el tipo de mensaje (<CODE>msgtyp</CODE>),
+y las banderas (<CODE>msgflg</CODE>). Busca las colas de mensajes
+esperando asociadas con la ID de la cola de mensajes, encuentra el
+primer mensaje en la cola, la cual comprueba el tipo pedido y lo copia
+en la antememoria del usuario dado. Si tal mensaje no es encontrado en la
+cola de mensajes esperando, la tarea pedida es encolada en la cola de
+receptores esperando hasta que el mensaje deseado est&aacute; disponible. Una
+discuci&oacute;n m&aacute;s profunda de las operaciones realizadas por sys_msgrcv()
+es la que sigue:</P>
+<P>
+<OL>
+<LI>    Primero, invoca a 
+<A HREF="#convert_mode">convert_mode()</A>
+para derivar el modo de b&uacute;squeda desde <CODE>msgtyp</CODE>.
+sys_msgrcv() entonces cierra el spinlock global de la cola de mensajes
+y obtiene el descriptor de la cola de mensajes asociado
+con la ID de la cola de mensajes. Si tal cola de mensajes no
+existe, retorna  EINVAL.</LI>
+<LI>    Chequea cuando la tarea actual tiene los permisos correctos
+para acceder a la cola de mensajes.</LI>
+<LI>
+<A NAME="rcvretry"></A> 
+Empezando desde el primer mensaje en la cola de mensajes de
+espera, invoca a 
+<A HREF="#testmsg">testmsg()</A> para
+chequear cuando el tipo del mensaje se empareja con el tipo
+requerido. sys_msgrcv() contin&uacute;a buscando hasta que un mensaje
+emparejado es encontrado o la cola de espera entera est&aacute;
+exausta. Si el modo de b&uacute;squeda es SEARCH_LESSEQUAL, entonces
+es buscado el primer mensaje en la cola con un tipo m&aacute;s bajo o igual
+a <CODE>msgtyp</CODE>.</LI>
+<LI>    Si un mensaje en encontrado, sys_msgrcv() realiza los siguientes
+subpasos:
+<OL>
+<LI>    Si el tama&ntilde;o del mensaje es m&aacute;s grande que el tama&ntilde;o
+deseado y <CODE>msgflg</CODE> indica que no se permiten
+errores, abre el spinlock de cola de mensajes global
+y retorna E2BIG.</LI>
+<LI>    Quita el mensaje de la cola de mensajes esperando y
+actualiza las estad&iacute;sticas de la cola de mensajes.</LI>
+<LI>    Despierta todas las tareas durmiendo en las colas
+de espera de los emisores. El borrado de un mensaje
+de la cola en los pasos previos hace posible que uno
+de los emisores progresen. Va a trav&eacute;s de 
+<A HREF="#laststep">last step</A>.</LI>
+</OL>
+</LI>
+<LI>    Si no hay mensajes emparejados el criterio del receptor es
+encontrado en la cola de mensajes esperando, entonces 
+<CODE>msgflg</CODE> es chequeado. Si IPC_NOWAIT est&aacute; establecido,
+entonces el spinlock global de la cola de mensajes es abierto
+y ENOMSG es retornado. En otro caso, el receptor es encolado
+en la cola de espera del receptor como sigue:
+<OL>
+<LI>    Una estructura de datos 
+<A HREF="#struct_msg_receiver">msg_receiver</A>
+<CODE>msr</CODE> es asignada y es a&ntilde;adida en la cabeza de
+la cola de espera.</LI>
+<LI>    El campo <CODE>r_tsk</CODE> de <CODE>msr</CODE> es
+establecido a la tarea actual.</LI>
+<LI>    Los campos <CODE>r_msgtype</CODE> y <CODE>r_mode</CODE>
+son inicializados con el tipo y modo del mensaje deseado
+respectivamente.</LI>
+<LI>    Si <CODE>msgflg</CODE> indica MSG_NOERROR, entonces el campo
+r_maxsize de <CODE>msr</CODE> es establecido para ser el
+valor de <CODE>msgsz</CODE>. En otro caso es establecido para
+ser INT_MAX.</LI>
+<LI>    El campo <CODE>r_msg</CODE> es inicializado para indicar 
+que todav&iacute;a no ha sido recibido el mensaje.</LI>
+<LI>    Despu&eacute;s de que la inicializaci&oacute;n est&aacute; completa,
+el estado de la tarea receptora es establecido a
+TASK_INTERRUPTIBLE, el spinlock global de colas de mensajes
+es abierto, y schedule() es invocado.</LI>
+</OL>
+</LI>
+<LI>    Despu&eacute;s de que el receptor es despertado, el campo <CODE>r_msg</CODE>
+de <CODE>msr</CODE> es chequeado. Este campo es usado para almacenar
+el mensaje entubado o, en el caso de un error, almacenar el
+estado del error. Si el campo <CODE>r_msg</CODE> es rellenado con
+el mensaje deseado, entonces va a 
+<A HREF="#laststep">last  step</A>. En otro caso, el spinlock global de colas de mensajes es
+cerrado otra vez.</LI>
+<LI>    Despu&eacute;s de obtener el spinlock, el campo <CODE>r_msg</CODE> es
+re-chequeado para ver si el mensaje fue recibido mientras
+se estaba esperando por el spinlock. Si el mensaje ha sido
+recibido, ocurre el 
+<A HREF="#laststep">last step</A>.</LI>
+<LI>    Si el campo <CODE>r_msg</CODE> todav&iacute;a est&aacute; sin cambiar, entonces
+la tarea tiene que ser despertada en orden de reintentarlo. En
+este caso, <CODE>msr</CODE> es quitado de la cola. Si hay una se&ntilde;al
+pendiente para la tarea, entonces el spinlock de la cola
+de mensajes global es abierto y EINTR es retornado. En otro
+caso, la funci&oacute;n necesita ir a  
+<A HREF="#rcvretry">back</A>
+y reintentarlo.</LI>
+<LI>    Si el campo <CODE>r_msg</CODE> muestra que ha ocurrido un error
+mientras estaba durmiendo, el spinlock de la cola de mensajes
+global es abierto y el error es devuelto.</LI>
+<LI>
+<A NAME="laststep"></A> 
+Despu&eacute;s de validar que la direcci&oacute;n de la antememoria del usuario
+<CODE>msp</CODE> es v&aacute;lida, el tipo de mensaje es cargado en el 
+campo <CODE>mtype</CODE> de <CODE>msp</CODE>, y 
+<A HREF="#store_msg">store_msg()</A> es invocado para copiar el contenido del
+mensaje al campo de <CODE>msp</CODE>. Finalmente la memoria para
+el mensaje es liberada por la funci&oacute;n 
+<A HREF="#free_msg">free_msg()</A>.</LI>
+</OL>
+</P>
+<H3><A NAME="datastructs"></A> Estructuras Espec&iacute;ficas de Mensajes</H3>
+
+<P>Las estructuras de datos para las colas de mensajes est&aacute;n definidas en
+msg.c.</P>
+<H3><A NAME="struct_msg_queue"></A> struct msg_queue</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+/* una estructura msq_queue para cada cola presente en el sistema */
+struct msg_queue {
+        struct kern_ipc_perm q_perm;
+        time_t q_stime;                 /* &uacute;ltimo tiempo del mensaje enviado */
+        time_t q_rtime;                 /* &uacute;ltimo tiempo del mensaje recibido */
+        time_t q_ctime;                 /* &uacute;timo tiempo de cambio */
+        unsigned long q_cbytes;         /* n&uacute;mero actual de bytes en la cola */
+        unsigned long q_qnum;           /* n&uacute;mero de mensajes en la cola */
+        unsigned long q_qbytes;         /* m&aacute;ximo n&uacute;mero de bytes en la cola */
+        pid_t q_lspid;                  /* &uacute;ltimo pid del mensaje recibido */
+        pid_t q_lrpid;                  /* &uacute;ltimo pid del mensaje recibido */
+
+        struct list_head q_messages;
+        struct list_head q_receivers;
+        struct list_head q_senders;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_msg_msg"></A> struct msg_msg</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+/* una estructura msg_msg para cada mensaje */
+struct msg_msg {
+        struct list_head m_list;
+        long  m_type;
+        int m_ts;           /* tama&ntilde;o del mensaje de texto */
+        struct msg_msgseg* next;
+        /* el mensaje actual sigue inmediatamente */
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_msg_msgseg"></A> struct msg_msgseg</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+/* segmento de mensaje para cada mensaje */
+struct msg_msgseg {
+        struct msg_msgseg* next;
+        /* la siguiente parte del mensaje sigue inmediatamente */
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_msg_sender"></A> struct msg_sender</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+/* un msg_sender para cada emisor durmiendo */
+struct msg_sender {
+        struct list_head list;
+        struct task_struct* tsk;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_msg_receiver"></A> struct msg_receiver</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+/* una estructura msg_receiver para cada receptor durmiendo */
+struct msg_receiver {
+        struct list_head r_list;
+        struct task_struct* r_tsk;
+
+        int r_mode;
+        long r_msgtype;
+        long r_maxsize;
+
+        struct msg_msg* volatile r_msg;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_msqid64_ds"></A> struct msqid64_ds</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct msqid64_ds {
+        struct ipc64_perm msg_perm;
+        __kernel_time_t msg_stime;      /* &uacute;ltimo tiempo del mensaje enviado */
+        unsigned long   __unused1;
+        __kernel_time_t msg_rtime;      /* &uacute;ltimo tiempo del mensaje recibido */
+        unsigned long   __unused2;
+        __kernel_time_t msg_ctime;      /* &uacute;ltimo tiempo de cambio */
+        unsigned long   __unused3;
+        unsigned long  msg_cbytes;      /* n&uacute;mero actual de bytes en la cola */
+        unsigned long  msg_qnum;        /* n&uacute;mero de mensajes en la cola */
+        unsigned long  msg_qbytes;      /* n&uacute;mero m&aacute;ximo de bytes en la cola */
+        __kernel_pid_t msg_lspid;       /* pid del &uacute;ltimo mensaje enviado */
+        __kernel_pid_t msg_lrpid;       /* pid del &uacute;ltimo mensaje recibido */
+        unsigned long  __unused4;
+        unsigned long  __unused5;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_msqid_ds"></A> struct msqid_ds</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+ struct msqid_ds {
+        struct ipc_perm msg_perm;
+        struct msg *msg_first;          /* primer mensaje en la cola, no usado */
+        struct msg *msg_last;           /* &uacute;ltimo mensaje en la cola, no usado */
+        __kernel_time_t msg_stime;      /* &uacute;ltimo tiempo del mensaje enviado */
+        __kernel_time_t msg_rtime;      /* &uacute;ltimo tiempo del mensaje recibido */
+        __kernel_time_t msg_ctime;      /* &uacute;ltimo tiempo de cambio */
+        unsigned long  msg_lcbytes;     /* reusar los campos borrados para 32 bit */
+        unsigned long  msg_lqbytes;     /* idem */
+        unsigned short msg_cbytes;      /* n&uacute;mero actual de bytes en la cola */
+        unsigned short msg_qnum;        /* n&uacute;mero de mensajes en la cola */
+        unsigned short msg_qbytes;      /* n&uacute;mero m&aacute;ximo de bytes en la cola */
+        __kernel_ipc_pid_t msg_lspid;   /* &uacute;ltimo pid del mensaje enviado */
+        __kernel_ipc_pid_t msg_lrpid;   /* &uacute;ltimo pid del mensaje recibido */
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="msg_setbuf"></A> msg_setbuf</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct msq_setbuf {
+        unsigned long   qbytes;
+        uid_t           uid;
+        gid_t           gid;
+        mode_t          mode;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="msgfuncs"></A> Funciones de Soporte de Mensajes</H3>
+
+
+<H3><A NAME="newque"></A> newque()</H3>
+
+<P>newqueue() asigna la memoria para un nuevo descriptor de una cola de
+mensajes (
+<A HREF="#struct_msg_queue">struct msg_queue</A>) y
+entonces llama a 
+<A HREF="#ipc_addid">ipc_addid()</A>, la cual
+reserva una entrada de la matriz de colas de mensaje para el nuevo descriptor
+de cola de mensajes. El descriptor de cola de mensajes es inicializado
+como sigue:</P>
+<P>
+<UL>
+<LI>    La estructura 
+<A HREF="#struct_kern_ipc_perm">kern_ipc_perm</A> es inicializada.</LI>
+<LI>    Los campos <CODE>q_stime</CODE> y <CODE>q_rtime</CODE> del descriptor
+de cola de mensajes son inicializados a 0. El campo 
+<CODE>q_ctime</CODE> es establecido a CURRENT_TIME.</LI>
+<LI>    El n&uacute;mero m&aacute;ximo de bytes permitidos en esta cola de
+mensajes (<CODE>q_qbytes</CODE>) es establecida a MSGMNB,
+y el n&uacute;mero de bytes actualmente usados por la cola
+(<CODE>q_cbytes</CODE>) es inicializada a 0.</LI>
+<LI>    La cola de mensajes esperando (<CODE>q_messages</CODE>),
+la cola de receptores esperando (<CODE>q_receivers</CODE>),
+y la cola de emisores esperando (<CODE>q_senders</CODE>)
+son inicializadas como vac&iacute;as.</LI>
+</UL>
+</P>
+<P>Todas las operaciones siguiendo la llamada a
+<A HREF="#ipc_addid">ipc_addid()</A> son realizadas mientras se
+mantiente el spinlock global de cola de mensajes. Despu&eacute;s de abrir el
+spinlock, newque() llama a msg_buildid(), que mapea directamente
+a 
+<A HREF="#ipc_buildid">ipc_buildid()</A>.
+<A HREF="#ipc_buildid">ipc_buildid()</A> usa el &iacute;ndice del descriptor
+de cola de mensajes para crear una &uacute;nica ID de cola de mensaje que es 
+entonces retornada al llamante de newque().</P>
+<H3><A NAME="freeque"></A> freeque()</H3>
+
+<P>Cuando una cola de mensajes va a ser borrada, la funci&oacute;n freeque() es
+llamada. Esta funci&oacute;n asume que el spinlock global de la cola de mensajes
+ya est&aacute; cerrado por la funci&oacute;n llamante. Libera todos los
+recursos del n&uacute;cleo asociados con esta cola de mensajes. Primero,
+llama a 
+<A HREF="#func_ipc_rmid">ipc_rmid()</A> (a trav&eacute;s de
+msg_rmid()) para borrar el descriptor de cola de mensajes del array
+de descriptores de cola de mensajes global. Entonces llama a
+<A HREF="#expunge_all">expunge_all</A> para despertar a todos los
+receptores durmiendo en esta cola de mensajes. Posteriormente el
+spinlock global de la cola de mensajes es liberado. Todos los mensajes
+almacenados en esta cola de mensajes son liberados y la memoria para los
+descriptores de cola son liberados.</P>
+<H3><A NAME="ss_wakeup"></A> ss_wakeup()</H3>
+
+<P>ss_wakeup() despierta todas las tareas en la cola de mensajes del emisor
+dado. Si esta funci&oacute;n es llamada por 
+<A HREF="#freeque">freeque()</A>, entonces todos los emisores en la cola son quitados
+de ella.</P>
+<H3><A NAME="ss_add"></A> ss_add()</H3>
+
+<P>ss_add() recibe como par&aacute;metro un descriptor de cola de mensajes y un
+mensaje de estructura de datos del emisor. Rellena el campo
+<CODE>tsk</CODE> del mensaje de la estructura de datos del emisor con el
+proceso actual, cambia el estado del proceso actual a TASK_INTERRUPTIBLE,
+entonces inserta el mensaje de la estructura de datos del emisor a la 
+cabeza de la cola de emisores esperando la cola de mensajes dada.  </P>
+<H3><A NAME="ss_del"></A> ss_del()</H3>
+
+<P>Si el mensaje de la estrutura de datos del emisor dado (<CODE>mss</CODE>)
+a&uacute;n est&aacute; en la cola de espera del emisor asociado, entonces ss_del()
+quita <CODE>mss</CODE> de la cola.</P>
+<H3><A NAME="expunge_all"></A> expunge_all()</H3>
+
+<P>expunge_all() recibe como par&aacute;metros un descriptor de la cola de
+mensajes (<CODE>msq</CODE>) y un valor entero (<CODE>res</CODE>) indicando el 
+motivo para despertar a los receptores. Para cada receptor
+durmiendo asociado con <CODE>msq</CODE>, el campo <CODE>r_msg</CODE> es
+establecido para indicar el motivo para despertar (<CODE>res</CODE>),  y la
+tarea asociada recibiendo es despertada. Esta funci&oacute;n es llamada cuando
+una cola de mensajes es quitada o un operaci&oacute;n de control de mensajes
+ha sido realizada.</P>
+<H3><A NAME="load_msg"></A> load_msg()</H3>
+
+<P>Cuando un proceso env&iacute;a un mensaje, la funci&oacute;n 
+<A HREF="#sys_msgsnd">sys_msgsnd()</A> primero invoca a la funci&oacute;n
+load_msg() para cargar el mensaje desde al espacio de usuario al espacio
+del n&uacute;cleo. El mensaje es representado en la memoria del n&uacute;cleo como
+una lista enlazada de bloques de datos. Asociado con el primer bloque de
+datos est&aacute; una estructura 
+<A HREF="#struct_msg_msg">msg_msg</A>
+que describe el mensaje completo. El bloque de datos asociado con la
+estructura msg_msg est&aacute; limitado por el tama&ntilde;o de DATA_MSG_LEN. El bloque
+de datos y la estructura son asignados en un bloque contiguo de memoria
+que puede ser tan grande como un p&aacute;gina en memoria. Si el mensaje total
+no se ajusta en este primer bloque de datos, entonces bloques de datos
+adicionales son asignados y son reorganizados en una lista enlazada.
+Estos bloques de datos est&aacute;n limitados por un tama&ntilde;o de DATA_SEG_LEN, y
+cada uno incluye una estructura 
+<A HREF="#struct_msg_msgseg">msg_msgseg)</A>. La estructura msg_msgseg  y los bloques de datos
+asociados son asignados en un bloque de memoria contigua que puede ser
+tan grande como una p&aacute;gina en memoria. Esta funci&oacute;n retorna la
+direcci&oacute;n de la nueva estructura 
+<A HREF="#struct_msg_msg">msg_msg</A> si es que tiene &eacute;xito.</P>
+<H3><A NAME="store_msg"></A> store_msg()</H3>
+
+<P>La funci&oacute;n store_msg() es llamada por 
+<A HREF="#sys_msgrcv">sys_msgrcv()</A> para reensamblar un mensaje recibido en la antememoria
+del espacio de usuario suministrado por el llamante. Los datos descritos
+por la estructura 
+<A HREF="#struct_msg_msg">msg_msg</A> y cualquier
+estructura 
+<A HREF="#struct_msg_msgseg">msg_msgseg</A> son
+secuencialmente copiados a la antememoria del espacio de usuario.</P>
+<H3><A NAME="free_msg"></A> free_msg()</H3>
+
+<P>La funci&oacute;n free_msg() libera la memoria para una estructura de datos de
+mensaje 
+<A HREF="#struct_msg_msg">msg_msg</A>, y los segmentos del
+mensaje.</P>
+<H3><A NAME="convert_mode"></A> convert_mode()</H3>
+
+<P>convert_mode() es llamada por 
+<A HREF="#sys_msgrcv">sys_msgrcv()</A>.
+Recibe como par&aacute;metros las direcciones del tipo del mensaje
+especificado (<CODE>msgtyp</CODE>) y una bandera (<CODE>msgflg</CODE>).
+Devuelve el modo de b&uacute;squeda al llamante basado en el valor de 
+<CODE>msgtyp</CODE> y <CODE>msgflg</CODE>. Si <CODE>msgtyp</CODE> es null (cero), entonces
+SEARCH_ANY es devuelto, Si <CODE>msgtyp</CODE> es menor que 0, entonces 
+<CODE>msgtyp</CODE> es establecido a su valor absoluto y SEARCH_LESSEQUAL
+es retornado. Si MSG_EXCEPT es especificado en  <CODE>msgflg</CODE>,
+entonces SEARCH_NOTEQUAL es retornado. En otro caso SEARCH_EQUAL es
+retornado.</P>
+<H3><A NAME="testmsg"></A> testmsg()</H3>
+
+<P>La funci&oacute;n testmsg() chequea cuando un mensaje conoce el criterio
+especificado por el receptor. Devuelve 1 si una de las siguientes
+condiciones es verdad:</P>
+<P>
+<UL>
+<LI>    El modo de b&uacute;squeda indica buscar cualquier mensaje 
+(SEARCH_ANY).</LI>
+<LI>    El modo de b&uacute;squeda es SEARCH_LESSEQUAL y el tipo de mensaje
+es menor o igual que el tipo deseado.</LI>
+<LI>    El modo de b&uacute;squeda es SEARCH_EQUAL y el tipo de mensaje es
+el mismo que el tipo deseado.</LI>
+<LI>    El modo de b&uacute;squeda es SEARCH_NOTEQUAL y el tipo de mensajes
+no es igual al tipo especificado.</LI>
+</UL>
+</P>
+<H3><A NAME="pipelined_send"></A> pipelined_send()</H3>
+
+<P>pipelined_send() permite a un proceso enviar directamente un mensaje
+a la cola de receptores mejor que depositar el mensaje en la cola 
+asociada de mensajes esperando. La funci&oacute;n 
+<A HREF="#testmsg">testmsg()</A> es invocada para encontrar el primer receptor que
+est&aacute; esperando por el mensaje dado. Si lo encuentra, el receptor
+esperando es quitado de la cola de receptores esperando, y la tarea
+receptora asociada es despertada. El mensaje es almacenado en el campo
+<CODE>r_msg</CODE> del receptor, y 1 es retornado. En el caso donde no hay
+un receptor esperando por el mensaje, 0 es devuelto.</P>
+<P>En el proceso de b&uacute;squeda de un receptor, los receptores potenciales
+quiz&aacute;s encuentren que han solicitado un tama&ntilde;o
+que es muy peque&ntilde;o para el mensaje dado. Tales receptores son quitados
+de la cola, y son despertados con un status de error de E2BIG, el cual
+es almacenado en el campo <CODE>r_msg</CODE>. La b&uacute;squeda entonces
+contin&uacute;a hasta que alguno de los receptores v&aacute;lidos es encontrado, o
+la cola est&aacute; exausta.</P>
+<H3><A NAME="copy_msqid_to_user"></A> copy_msqid_to_user()</H3>
+
+<P>copy_msqid_to_user() copia el contenido de una antememoria del n&uacute;cleo a la
+antememoria del usuario. Recibe como par&aacute;metros una antememoria del usuario, una
+antememoria del n&uacute;cleo del tipo 
+<A HREF="#struct_msqid64_ds">msqid64_ds</A>, y una bandera versi&oacute;n indicando la nueva versi&oacute;n
+IPC vs. la vieja versi&oacute;n IPC. Si la bandera de la versi&oacute;n es igual a
+IPC_64, entonces copy_to_user() es llamado para copiar desde la antememoria
+del n&uacute;cleo a la antememoria del usuario directamente. En otro caso una antememoria
+temporal del tipo struct msqid_ds es inicializada, y los datos del
+n&uacute;cleo son trasladados a esta antememoria temporal. Posteriormente
+copy_to_user() es llamado para copiar el contenido de la antememoria temporal
+a la antememoria del usuario.</P>
+<H3><A NAME="copy_msqid_from_user"></A> copy_msqid_from_user()</H3>
+
+<P>La funci&oacute;n copy_msqid_from_user() recibe como par&aacute;metros un
+mensaje de la antememoria del n&uacute;cleo del tipo struct msq_setbuf, una antememoria de
+usuario y una bandera de la versi&oacute;n indicando la nueva versi&oacute;n IPC vs.
+la vieja versi&oacute;n IPC. En la caso de la nueva versi&oacute;n IPC,
+copy_from_user() es llamada para copiar el contenido de la antememoria del
+usuario a una antememoria temporal del tipo
+<A HREF="#struct_msqid64_ds">msqid64_ds</A>.
+Entonces, los campos <CODE>qbytes</CODE>,<CODE>uid</CODE>, <CODE>gid</CODE>, y
+<CODE>mode</CODE> de la antememoria del n&uacute;cleo son rellenados con los valores de
+los campos correspondientes desde la antememoria temporal. En el caso de la
+vieja versi&oacute;n IPC, una antememoria temporal del tipo struct 
+<A HREF="#struct_msqid_ds">msqid_ds</A> es usado en su vez.</P>
+<H2><A NAME="sharedmem"></A> <A NAME="ss5.3">5.3</A> <A HREF="dentro-nucleo-linux.html#toc5.3">Memoria Compartida</A>
+</H2>
+
+
+<H3><A NAME="Shared_Memory_System_Call_Interfaces"></A> Interfaces de las llamadas al sistema de la MemoriaCompartida</H3>
+
+
+<H3><A NAME="sys_shmget"></A> sys_shmget()</H3>
+
+<P>La llamada entera a sys_shmget() es protegida por el sem&aacute;foro global de
+memoria compartida.</P>
+<P>En el caso donde un valor de llave es suministrado para un segmento
+existente de memoria compartida, el correspondiente &iacute;ndice es
+buscado en la matriz de descriptores de memoria compartida, y los
+par&aacute;metros y los permisos del llamante son verificados antes de
+devolver la ID del segmento de memoria compartida. Las operaciones de
+b&uacute;squeda y verificaci&oacute;n son realizadas mientras es mantenido el
+spinlock global de memoria compartida.</P>
+<H3><A NAME="sys_shmctl"></A> sys_shmctl()</H3>
+
+
+<H3><A NAME="IPC_INFO"></A> IPC_INFO</H3>
+
+<P>Una antememoria temporal 
+<A HREF="#struct_shminfo64">shminfo64</A> es
+cargada con los par&aacute;metros del sistema de memoria compartida y es
+copiada fuera del espacio de usuario para el acceso de la aplicaci&oacute;n
+llamante.</P>
+<H3><A NAME="SHM_INFO"></A> SHM_INFO</H3>
+
+<P>El sem&aacute;foro global de memoria compartida y el spinlock global de memoria
+compartida son mantenidos mientras se obtienen estad&iacute;sticas de la
+informaci&oacute;n del sistema para la memoria compartida. La funci&oacute;n
+<A HREF="#shm_get_stat">shm_get_stat()</A> es llamada para calcular
+el n&uacute;mero de p&aacute;ginas de memoria compartidas que est&aacute;n residentes en
+memoria y el n&uacute;mero de p&aacute;ginas de memoria compartida que han sido
+intercambiadas (swapped out). Otras estad&iacute;sticas incluyen el n&uacute;mero
+total de p&aacute;ginas de memoria compartida y el n&uacute;mero de segmentos de
+memoria compartida en uso. Las cuentas de <CODE>swap_attempts</CODE> y
+<CODE>swap_successes</CODE> son codificadas fuertemente a cero. Estas
+estad&iacute;sticas son almacenadas en una antememoria temporal
+<A HREF="#struct_shm_info">shm_info</A> y copiadas fuera del espacio
+de usuario para la aplicaci&oacute;n llamante.</P>
+<H3><A NAME="SHM_STAT_IPC_STAT"></A> SHM_STAT, IPC_STAT</H3>
+
+<P>Para SHM_STAT y IPC_STATA, una antememoria temporal del tipo
+<A HREF="#struct_shmid64_ds">struct shmid64_ds</A> es inicializada, y
+el spinlock global de memoria compartida es cerrado.</P>
+<P>Para el caso SHM_STAT, el par&aacute;metro ID del segmento de memoria
+compartida se espera que sea un &iacute;ndice exacto (esto es, 0 a n donde n
+es el n&uacute;mero de IDs de memoria compartida en el sistema). Despu&eacute;s de
+validar el &iacute;ndice, 
+<A HREF="#ipc_buildid">ipc_buildid()</A> es
+llamado (a trav&eacute;s de shm_buildid()) para convertir el &iacute;ndice en una ID
+de memoria compartida. En el caso transitorio de SHM_STAT, la ID de la
+memoria compartida ser&aacute; el valor de retorno. Notar que esta es una
+caracter&iacute;stica no documentada, pero es mantenida para el programa
+ipcs(8). </P>
+<P>Para el caso IPC_STAT, el par&aacute;metro ID del segmento de memoria
+compartida se espera que sea una ID que ha sido generada por una llamada
+a 
+<A HREF="#sys_shmget">shmget()</A>. La ID es validada antes de
+proceder. En el caso transitorio de IPC_STAT, el valor de
+retorno ser&aacute; 0.</P>
+<P>Para SHM_STAT y IPC_STAT, los permisos de acceso del llamante son
+verificados. Las estad&iacute;sticas deseadas son cargadas en la antememoria
+temporal y entonces copiadas fuera de la aplicaci&oacute;n llamante.</P>
+<H3><A NAME="SHM_LOCK_SHM_UNLOCK"></A> SHM_LOCK, SHM_UNLOCK</H3>
+
+<P>Despu&eacute;s de validar los permisos de acceso, el spinlock global de memoria
+compartida es cerrado, y la ID del segmento de memoria compartida
+es validado. Para SHM_LOCK y SHM_UNLOCK, 
+<A HREF="#shmem_lock">shmem_lock()</A> es llamada para realizar la
+funci&oacute;n. Los par&aacute;metros para 
+<A HREF="#shmem_lock">shmem_lock()</A> identifican la funci&oacute;n a realizar.</P>
+<H3><A NAME="IPC_RMID"></A> IPC_RMID</H3>
+
+<P>Durante el IPC_RMID el sem&aacute;foro global de memoria compartida y el
+spinlock global de memoria compartida son mantenidos a trav&eacute;s de esta
+funci&oacute;n. La ID de la Memoria Compartida es validada, y entonces si no hay
+conexiones actuales, 
+<A HREF="#shm_destroy">shm_destroy()</A> es
+llamada para destruir el segmento de memoria compartida. En otro caso, la
+bandera SHM_DEST es establecida para marcarlo para destrucci&oacute;n, y la
+bandera IPC_PRIVATE es establecida para prevenir que otro proceso sea
+capaz de referenciar la ID de la memoria compartida.</P>
+<H3><A NAME="IPC_SET"></A> IPC_SET</H3>
+
+<P>Despu&eacute;s de validar la ID del segmento de memoria compartida y los
+permisos de acceso del usuario, las banderas <CODE>uid</CODE>, <CODE>gid</CODE>,
+y <CODE>mode</CODE> del segmento de la memoria compartida son actualizadas
+con los datos del usuario. El campo <CODE>shm_ctime</CODE> tambi&eacute;n es
+actualizado. Estos cambios son realizados mientras se mantiene el
+sem&aacute;foro global de memoria compartida global y el spinlock global de memoria
+compartida.</P>
+<H3><A NAME="sys_shmat"></A> sys_shmat()</H3>
+
+<P>sys_shmat() toma como par&aacute;metro, una ID de segmento de memoria
+compartida, una direcci&oacute;n en la cual el segmento de memoria compartida
+deber&iacute;a de ser conectada (<CODE>shmaddr</CODE>), y las banderas que ser&aacute;n
+descritas m&aacute;s adelante.</P>
+<P>Si <CODE>shmaddr</CODE> no es cero, y la bandera SHM_RND es especificada,
+entonces <CODE>shmaddr</CODE> es redondeado por abajo a un m&uacute;ltiplo de
+SHMLBA. Si <CODE>shmaddr</CODE> no es un m&uacute;ltiplo de SHMLBA y SHM_RND no es
+especificado, entonces EINVAL es devuelto.</P>
+<P>Los permisos de acceso del llamante son validados y el campo
+<CODE>shm_nattch</CODE> del segmento de memoria compartida es incrementado.
+N&oacute;tese que este incremento garantiza que la cuenta de enlaces no es
+cero y previene que el segmento de memoria compartida sea destruido
+durante el proceso de enlazamiento al segmento. Estas operaciones son
+realizadas mientras se mantiene el spinlock global de memoria compartida.</P>
+<P>La funci&oacute;n do_mmap() es llamada para crear un mapeo de memoria virtual de
+las p&aacute;ginas del segmento de memoria compartida. Esto es realizado
+mientras se mantiene el sem&aacute;foro <CODE>mmap_sem</CODE> de la tarea actual.
+La bandera MAP_SHARED es pasada a do_mmap(). Si una direcci&oacute;n fue
+suministrada por el llamante, entonces la bandera MAP_FIXED tambi&eacute;n es
+pasada a do_mmap(). En otro caso, do_mmap() seleccionar&aacute; la direcci&oacute;n
+virtual en la cual mapear el segmento de memoria compartida.</P>
+<P>N&Oacute;TESE que 
+<A HREF="#shm_inc">shm_inc()</A> ser&aacute; invocado con la
+llamada a la funci&oacute;n do_mmap() a trav&eacute;s de la estructura
+<CODE>shm_file_operations</CODE>. Esta funci&oacute;n es llamada para establecer
+el PID, para establecer el tiempo actual, y para incrementar el n&uacute;mero
+de enlaces a este segmento de memoria compartida.</P>
+<P>Despu&eacute;s de la llamada a do_mmap(), son obtenidos el sem&aacute;foro global de memoria
+compartida y el spinlock global de la memoria compartida. La
+cuenta de enlaces es entonces decrementada. El siguiente cambio en la
+cuenta de enlaces es 1 para una llamada a shmat() por culpa de la
+llamada a 
+<A HREF="#shm_inc">shm_inc()</A>. Si, despu&eacute;s de
+decrementar la cuenta de enlaces, la cuenta resultante que se encuentra
+es cero, y el segmento se marca para la destrucci&oacute;nn (SHM_DEST),
+entonces 
+<A HREF="#shm_destroy">shm_destroy()</A> es llamado para 
+liberar los recursos del segmento de memoria compartida.</P>
+<P>Finalmente, la direcci&oacute;n virtual en la cual la memoria compartida es
+mapeada es devuelta al llamante en la direcci&oacute;n especificada por el
+usuario. Si un c&oacute;digo de error ha sido retornado por do_mmap(),
+entonces este c&oacute;digo de fallo es pasado en el valor de retorno para la
+llamada al sistema.</P>
+<H3><A NAME="sys_shmdt"></A> sys_shmdt()</H3>
+
+<P>El sem&aacute;foro global de la memoria compartida es mantenido mientras se
+realiza sys_shmdt(). La <CODE>mm_struct</CODE> del actual proceso es buscado
+para la <CODE>vm_area_struct</CODE> asociada con la direcci&oacute;n de memoria
+compartida. Cuando es encontrada, do_munmap() es llamado para deshacer
+el mapeo de direcciones virtuales para el segmento de la memoria
+compartida.</P>
+<P>N&oacute;tese tambi&eacute;n que do_munmap() realiza una llamada atr&aacute;s a
+<A HREF="#shm_close">shm_close()</A>, la cual realiza las funciones
+manteniendo el libro de memoria compartida, y libera los recursos del
+segmento de memoria compartida si no hay m&aacute;s enlaces.</P>
+<P>sys_shmdt() incondicionalmente devuelve 0.</P>
+<H3><A NAME="shm_structures"></A> Estructuras de Soporte de Memoria Compartida</H3>
+
+
+<H3><A NAME="struct_shminfo64"></A> struct shminfo64</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct shminfo64 {
+        unsigned long   shmmax;
+        unsigned long   shmmin;
+        unsigned long   shmmni;
+        unsigned long   shmseg;
+        unsigned long   shmall;
+        unsigned long   __unused1;
+        unsigned long   __unused2;
+        unsigned long   __unused3;
+        unsigned long   __unused4;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_shm_info"></A> struct shm_info</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct shm_info {
+        int used_ids;
+        unsigned long shm_tot;  /* shm asignada total */
+        unsigned long shm_rss;  /* shm residente total */
+        unsigned long shm_swp;  /* shm intercambiada total */
+        unsigned long swap_attempts;
+        unsigned long swap_successes;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_shmid_kernel"></A> struct shmid_kernel</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct shmid_kernel /* privadas del n&uacute;cleo */
+{
+        struct kern_ipc_perm    shm_perm;
+        struct file *           shm_file;
+        int                     id;
+        unsigned long           shm_nattch;
+        unsigned long           shm_segsz;
+        time_t                  shm_atim;
+        time_t                  shm_dtim;
+        time_t                  shm_ctim;
+        pid_t                   shm_cprid;
+        pid_t                   shm_lprid;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_shmid64_ds"></A> struct shmid64_ds</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct shmid64_ds {
+        struct ipc64_perm       shm_perm;       /* permisos de la operaci&oacute;n */
+        size_t                  shm_segsz;      /* tama&ntilde;o del segmento (bytes) */
+        __kernel_time_t         shm_atime;      /* &uacute;ltimo tiempo de enlace */
+        unsigned long           __unused1;
+        __kernel_time_t         shm_dtime;      /* &uacute;ltimo tiempo de desenlace */
+        unsigned long           __unused2;
+        __kernel_time_t         shm_ctime;      /* &uacute;ltimo tiempo de cambio */
+        unsigned long           __unused3;
+        __kernel_pid_t          shm_cpid;       /* pid del creador */
+        __kernel_pid_t          shm_lpid;       /* pid del &uacute;ltimo operador */
+        unsigned long           shm_nattch;     /* n&uacute;mero de enlaces actuales */
+        unsigned long           __unused4;
+        unsigned long           __unused5;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_shmem_inode_info"></A> struct shmem_inode_info</H3>
+
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct shmem_inode_info {
+        spinlock_t      lock;
+        unsigned long   max_index;
+        swp_entry_t     i_direct[SHMEM_NR_DIRECT]; /* para el primer bloque */
+        swp_entry_t   **i_indirect; /* doble bloque indirecto */
+        unsigned long   swapped;
+        int             locked;     /* en la memoria */
+        struct list_head        list;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="shm_primitives"></A> Funciones de Soporte De Memoria Compartida</H3>
+
+
+<H3><A NAME="newseg"></A> newseg()</H3>
+
+<P>La funci&oacute;n newseg() es llamada cuando un nuevo segmento de memoria
+compartida tiene que ser creado. Act&uacute;a con tres par&aacute;metros para el
+nuevo segmento: la llave, la bandera y el tama&ntilde;o, Despu&eacute;s de validar
+que el tama&ntilde;o del segmento de la memoria compartida que va a ser creado est&aacute;
+entre SHMMIN y SHMMAX y que el n&uacute;mero total de segmentos de memoria
+compartida no excede de SHMALL, asigna un nuevo descriptor de memoria
+compartida.
+La funci&oacute;n 
+<A HREF="#shmem_file_setup">shmem_file_setup()</A> es
+invocada posteriormente a crear un archivo no enlazado del tipo tmpfs. El
+puntero del archivo retornado es guardado en el campo <CODE>shm_file</CODE>
+del descriptor del segmento de memoria compartida asociado. El nuevo
+descriptor de memoria compartida es inicializado e insertado en la matriz
+global de IPC de descriptores de segmentos de memoria compartida. La ID 
+del segmento de memoria compartida es creado por shm_buildid() (a
+trav&eacute;s de 
+<A HREF="#ipc_buildid">ipc_buildid()</A>).
+La ID de este segmento es guardada en el campo <CODE>id</CODE> del
+descriptor de memoria compartida, al igual que en el campo
+<CODE>i_ino</CODE> del inodo asociado. En adicci&oacute;n, la direcci&oacute;n de las
+operaciones de memoria compartida definidas en la estructura 
+<CODE>shm_file_operation</CODE> son almacenadas en el fichero asociado. El
+valor de la variable global <CODE>shm_tot</CODE>, que indica el n&uacute;mero
+total de segmentos de memoria compartida a lo largo del sistema, es
+tambi&eacute;n incrementado para reflejar este cambio. Si tiene &eacute;xito, la ID
+del segmento es retornada a la aplicaci&oacute;n llamante.</P>
+<H3><A NAME="shm_get_stat"></A> shm_get_stat()</H3>
+
+<P>Los ciclos de shm_get_stat() van a trav&eacute;s de todas las estructuras de
+memoria compartida, y calcula el n&uacute;mero total de p&aacute;ginas de memoria en
+uso por la memoria compartida y el n&uacute;mero total de p&aacute;ginas de memoria
+compartida que est&aacute;n intercambiadas. Hay una estructura de fichero y
+una estructura de inodo para cada segmento de memoria compartida. Como
+los datos requeridos son obtenidos a trav&eacute;s del inodo, el
+spinlock para cada estructura inodo que es accedido es cerrado y abierto
+en secuencia.</P>
+<H3><A NAME="shmem_lock"></A> shmem_lock()</H3>
+
+<P>shmem_lock() recibe como par&aacute;metros un puntero al descriptor del segmento
+de memoria compartida y una bandera indicando cerrado vs. abierto. El
+estado de bloqueo del segmento de memoria compartida es almacenado en
+el inodo asociado. Este estado es comparado con el estado de bloqueo
+deseado: shmem_lock() simplemente retorna si ellos se corresponden.</P>
+<P>Mientras se est&aacute; manteniendo el sem&aacute;foro del inodo asociado, el estado
+de bloqueo del inodo es establecido. La siguiente lista de puntos
+ocurren en cada p&aacute;gina en el segmento de memoria compartida:</P>
+<P>
+<UL>
+<LI>    find_lock_page() es llamado para cerrar la p&aacute;gina (estableciendo
+PG_locked) y para incrementar la cuenta de referencia de la
+p&aacute;gina. Incrementando la cuenta de referencia se asegura que el
+segmento de memoria compartida permanece bloqueado en memoria 
+durante esta operaci&oacute;n.</LI>
+<LI>    Si el estado deseado es cerrado, entonces PG_locked es
+limpiado, pero la cuenta de referencia permanece incrementada.</LI>
+<LI>    Si el estado deseado es abierto, entonces la cuenta de 
+referencia es decrementada dos veces durante la actual
+referencia, y una vez para la referencia existente que
+caus&oacute; que la p&aacute;gina permanezca bloqueada en memoria.
+Entonces PG_locked es limpiado.</LI>
+</UL>
+</P>
+<H3><A NAME="shm_destroy"></A> shm_destroy()</H3>
+
+<P>Durante shm_destroy()  el n&uacute;mero total de p&aacute;ginas de memoria
+compartida es ajustada para que cuente el borrado del segmento de
+memoria compartida. 
+<A HREF="#func_ipc_rmid">ipc_rmid()</A>  es
+llamado (a trav&eacute;s de shm_rmid()) para borrar la ID de Memoria
+Compartida. 
+<A HREF="#shmem_lock">shmem_lock</A> es llamado para
+abrir las p&aacute;ginas de memoria compartida, efectivamente, decrementando la
+cuenta de referencia a cero para cada p&aacute;gina. fput() es llamado para
+decrementar el contador de uso para <CODE>f_count</CODE> para el objeto
+fichero deseado, y si es necesario, para liberar los recursos del objeto
+fichero. kfree() es llamado para liberar el descriptor de segmento de
+memoria compartida.</P>
+<H3><A NAME="shm_inc"></A> shm_inc()</H3>
+
+<P>shm_inc() establece el PID, establece el tiempo actual, e incrementa el
+n&uacute;mero de enlaces para el segmento de memoria compartida dado. Estas
+operaciones son realizadas mientras se mantiene el spinlock global de memoria
+compartida.</P>
+<H3><A NAME="shm_close"></A> shm_close()</H3>
+
+<P>shm_close() actualiza los campos <CODE>shm_lprid</CODE> y <CODE>shm_dtim</CODE>
+y decrementa el n&uacute;mero de segmentos enlazados de memoria compartida. Si
+no hay otros enlaces al segmento de memoria compartida, entonces 
+<A HREF="#shm_destroy">shm_destroy()</A> es llamado para liberar los
+recursos de la memoria compartida. Estas operaciones son todas
+realizadas mientras se mantienen el sem&aacute;foro global de memoria compartida
+y el spinlock global de memoria compartida.</P>
+<H3><A NAME="shmem_file_setup"></A> shmem_file_setup()</H3>
+
+<P>La funci&oacute;n shmem_file_setup() configura un archivo sin enlazar que vive
+en el sistema de ficheros tmpfs con el nombre y tama&ntilde;o dados. Si hay
+suficientes recursos de memoria para este fichero, crea una nueva dentry
+bajo la raiz montada de tmpfs, y asigna un nuevo descriptor de fichero y
+un nuevo objeto inodo del tipo tmpfs. Entonces asocia el nuevo objeto
+dentry con el nuevo objeto inodo llamando a d_instantiate() 
+y guarda la direcci&oacute;n del objeto dentry en el descriptor de fichero.
+El campo <CODE>i_size</CODE> del objeto inodo es establecido para ser del
+tama&ntilde;o del fichero y el campo <CODE>i_nlink</CODE>  es establecido para ser
+0 en orden a marcar el inodo no enlazado. Tambi&eacute;n, shmem_file_setup()
+almacena la direcci&oacute;n de la estructura <CODE>shmem_file_operations</CODE>
+en el campo <CODE>f_op</CODE>, e inicializa los campos <CODE>f_mode</CODE>
+y <CODE>f_vfsmnt</CODE> del descriptor de fichero propio. La funci&oacute;n
+shmem_truncate() es llamada para completar la inicializaci&oacute;n del objeto
+inodo. Si tiene &eacute;xito, shmem_file_setup() devuelve el nuevo descriptor
+de fichero.</P>
+<H2><A NAME="ipc_primitives"></A> <A NAME="ss5.4">5.4</A> <A HREF="dentro-nucleo-linux.html#toc5.4">Primitivas IPC de Linux</A>
+</H2>
+
+
+<H3><A NAME="Generic_Linux_IPC_Primitives_used_with_Semaphores_Messages_and_Shared_Memory"></A> Primitivas IPC de Linux Gen&eacute;ricas usadas con Sem&aacute;foros, Mensajes yMemoria Compartida</H3>
+
+<P>Los sem&aacute;foros, mensajes, y mecanismos de memoria compartida de Linux
+son construidos con un conjunto de primitivas comunes. Estas primitivas
+son descritas en las secciones posteriores.</P>
+
+<H3><A NAME="ipc_alloc"></A> ipc_alloc()</H3>
+
+<P>Si el asignamiento de memoria es mayor que PAGE_SIZE, entonces
+vmalloc() es usado para asignar memoria. En otro caso, kmalloc() es
+llamado con GFP_KERNEL para asignar la memoria.</P>
+<H3><A NAME="ipc_addid"></A> ipc_addid()</H3>
+
+<P>Cuando un nuevo conjunto de sem&aacute;foros, cola de mensajes, o segmento de
+memoria compartido es a&ntilde;adido, ipc_addid() primero llama a 
+<A HREF="#grow_ary">grow_ary()</A> para asegurarse que el tama&ntilde;o de la
+correspondiente matriz de descriptores es suficientemente grande para el
+m&aacute;ximo del sistema. La matriz de descriptores es buscada para el primer
+elemento sin usar. Si un elemento sin usar es encontrado, la cuenta de
+descriptores que est&aacute;n en uso es incrementada. La estructura 
+<A HREF="#struct_kern_ipc_perm">kern_ipc_perm</A> para el nuevo
+recurso descriptor es entonces inicializado, y el &iacute;ndice de la matriz para
+el nuevo descriptor es devuelto. Cuando ipc_addid() tiene &eacute;xito,
+retorna con el spinlock global cerrado para el tipo IPC dado.</P>
+<H3><A NAME="func_ipc_rmid"></A> ipc_rmid()</H3>
+
+<P>ipc_rmid() borra el descriptor IPC desde la matriz de descriptores global
+del tipo IPC, actualiza la cuenta de IDs que est&aacute;n en uso, y ajusta la
+m&aacute;xima ID en la matriz de descriptores correspondiente si es necesario.
+Un puntero al descriptor asociado IPC con la ID del IPC dado es
+devuelto.</P>
+<H3><A NAME="ipc_buildid"></A> ipc_buildid()</H3>
+
+<P>ipc_buildid() crea una &uacute;nica ID para ser asociada con cada descriptor
+con el tipo IPC dado. Esta ID es creada a la vez que el nuevo elemento
+IPC es a&ntilde;adido (ej. un nuevo segmento de memoria compartido o un nuevo
+conjunto de sem&aacute;foros). La ID del IPC se convierte f&aacute;cilmente en el
+&iacute;ndice de la correspondiente matriz de descriptores. Cada tipo IPC
+mantiene una secuencia de n&uacute;meros la cual es incrementada cada vez que
+un descriptor es a&ntilde;adido. Una ID es creada multiplicando el n&uacute;mero de
+secuencia con SEQ_MULTIPLIER y a&ntilde;adiendo el producto al &iacute;ndice de la matriz
+de descriptores. La secuencia de n&uacute;meros usados en crear una ID de un
+IPC particular es entonces almacenada en el descriptor correspondiente.
+La existencia de una secuencia de n&uacute;meros hace posible detectar el uso
+de una ID de IPC sin uso.</P>
+<H3><A NAME="ipc_checkid"></A> ipc_checkid()</H3>
+
+<P>ipc_checkid() divide la ID del IPC dado por el SEQ_MULTIPLIER y compara
+el cociente con el valor seq guardado en el descriptor correspondiente.
+Si son iguales, entonces la ID del IPC se considera v&aacute;lida y 1 es
+devuelto. En otro caso, 0 es devuelto.</P>
+<H3><A NAME="grow_ary"></A> grow_ary()</H3>
+
+<P>grow_ary() maneja la posibilidad de que el n&uacute;mero m&aacute;ximo (ajustable)
+de IDs para un tipo IPC dado pueda ser din&aacute;micamente cambiado. Fuerza
+al actual l&iacute;mite m&aacute;ximo para que no sea mayor que el limite del sistema
+permanente (IPCMNI) y lo baja si es necesario. Tambi&eacute;n se asegura de
+que la matriz de descriptores existente es suficientemente grande. Si el
+tama&ntilde;o de la matriz existente es suficientemente grande, entonces el
+l&iacute;mite m&aacute;ximo actual es devuelto. En otro caso, una nueva matriz m&aacute;s
+grande es asignada, la matriz vieja es copiada en la nueva, y la vieja es
+liberada. El correspondiente spinlock global es mantenido mientras se
+actualiza la matriz de descriptores para el tipo IPC dado.</P>
+<H3><A NAME="ipc_findkey"></A> ipc_findkey()</H3>
+
+<P>ipc_findkey() busca a trav&eacute;s de la matriz de descriptores del objeto
+especificado 
+<A HREF="#struct_ipc_ids">ipc_ids</A>, y busca la
+llave especificada. Una vez encontrada, el &iacute;ndice del descriptor
+correspondiente es devuelto. Si la llave no es encontrada, entonces
+es devuelto -1.</P>
+<H3><A NAME="ipcperms"></A> ipcperms()</H3>
+
+<P>ipcperms() chequa el usuario, grupo, y otros permisos para el acceso de
+los recursos IPC. Devuelve 0 si el permiso est&aacute; garantizado y -1 en
+otro caso. </P>
+<H3><A NAME="ipc_lock"></A> ipc_lock()</H3>
+
+<P>ipc_lock() coge una ID de IPC como uno de sus par&aacute;metros. Cierra el
+spinlock global para el tipo IPC dado, y devuelve un puntero al
+descriptor correspondiente a la ID IPC especificada.</P>
+<H3><A NAME="ipc_unlock"></A> ipc_unlock()</H3>
+
+<P>ipc_unlock() libera el spinlock global para el tipo IPC indicado.</P>
+<H3><A NAME="ipc_lockall"></A> ipc_lockall()</H3>
+
+<P>ipc_lockall() cierra el spinlock global para el mecanismo IPC dado (esto
+es: memoria compartida, sem&aacute;foros, y mensajes).</P>
+<H3><A NAME="ipc_unlockall"></A> ipc_unlockall()</H3>
+
+<P>ipc_unlockall() abre el spinlock global para el mecanismo IPC dado (esto
+es: memoria compartida, sem&aacute;foros, y mensajes).</P>
+<H3><A NAME="ipc_get"></A> ipc_get()</H3>
+
+<P>ipc_get() coge un puntero al tipo particular IPC (memoria compartida,
+sem&aacute;foros o colas de mensajes) y una ID de un descriptor, y devuelve un
+puntero al descriptor IPC correspondiente. N&oacute;tese que aunque los
+descriptores para cada tipo IPC son tipos de datos diferentes, el tipo
+de estructura com&uacute;n 
+<A HREF="#struct_kern_ipc_perm">kern_ipc_perm</A>
+est&aacute; embebida como la primera entidad en todos los casos.
+La funci&oacute;n ipc_get() devuelve este tipo de datos com&uacute;n. El modelo
+esperado es que ipc_get() es llamado a trav&eacute;s de la funci&oacute;n envoltorio
+(ej. shm_get()) la cual arroja el tipo de datos al tipo de datos
+correcto del descriptor.</P>
+<H3><A NAME="ipc_parse_version"></A> ipc_parse_version()</H3>
+
+<P>ipc_parse_version() borra la bandera IPC_64 desde el comando si est&aacute;
+presente y devuelve IPC_64 o IPC_OLD.</P>
+<H3><A NAME="ipc_structures"></A> Estructuras Gen&eacute;ricas IPC usadas con Sem&aacute;foros,Mensajes, y Memoria Compartida</H3>
+
+<P>Todos los sem&aacute;foros, mensajes, y mecanismos de memoria compartida hacen
+un uso de las siguientes estructuras comunes:</P>
+
+<H3><A NAME="struct_kern_ipc_perm"></A> struct kern_ipc_perm</H3>
+
+<P>Cada descriptor IPC tiene un objeto de datos de este tipo como primer
+elemento. Esto hace posible acceder a cualquier descriptor desde
+cualquier funci&oacute;n gen&eacute;rica IPC usando un puntero de este tipo de datos.</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+/* usados por la estructuras de datos en el n&uacute;cleo */
+struct kern_ipc_perm {
+    key_t key;
+    uid_t uid;
+    gid_t gid;
+    uid_t cuid;
+    gid_t cgid;
+    mode_t mode;
+    unsigned long seq;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_ipc_ids"></A> struct ipc_ids</H3>
+
+<P>La estructura ipc_ids describe los datos comunes para los sem&aacute;foros,
+colas de mensajes, y memoria compartida. Hay tres instancias globales de
+esta estructura de datos --<CODE>semid_ds</CODE>, <CODE>msgid_ds</CODE> y
+<CODE>shmid_ds</CODE>-- para los sem&aacute;foros, mensajes y memoria compartida
+respectivemente. En cada instancia, el sem&aacute;foro <CODE>sem</CODE> es usado
+para proteger el acceso a la estructura.
+El campo <CODE>entries</CODE> apunta a una matriz de descriptores de IPC, y el
+spinlock <CODE>ary</CODE> protege el acceso a esta matriz. El campo
+<CODE>seq</CODE> es una secuencia de n&uacute;meros global la cual ser&aacute;
+incrementada cuando un nuevo recurso IPC es creado.</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct ipc_ids {
+    int size;
+    int in_use;
+    int max_id;
+    unsigned short seq;
+    unsigned short seq_max;
+    struct semaphore sem;
+    spinlock_t ary;
+    struct ipc_id* entries;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<H3><A NAME="struct_ipc_id"></A> struct ipc_id</H3>
+
+<P>Una matriz de estructuras ipc_id existe en cada instancia de la estructura
+<A HREF="#struct_ipc_ids">ipc_ids</A>. La matriz es din&aacute;micamente
+asignada y quiz&aacute;s sea reemplazada con una matriz m&aacute;s grande por 
+<A HREF="#grow_ary">grow_ary()</A> tal como requiere. La matriz es a veces
+referida por la matriz de descriptores, desde que el tipo de datos
+<A HREF="#struct_kern_ipc_perm">kern_ipc_perm</A> es usado como tipo
+de datos de descriptores comunes por las funciones gen&eacute;ricas IPC.</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct ipc_id {
+    struct kern_ipc_perm* p;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<HR>
+<A HREF="dentro-nucleo-linux-6.html">Página siguiente</A>
+<A HREF="dentro-nucleo-linux-4.html">Página anterior</A>
+<A HREF="dentro-nucleo-linux.html#toc5">Índice general</A>
+</BODY>
+</HTML>

@@ -1,0 +1,188 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<HTML>
+<HEAD>
+ <META NAME="GENERATOR" CONTENT="LinuxDoc-Tools 0.9.21">
+ <TITLE>Dentro del n&uacute;cleo Linux 2.4: Memoria Intermedia de P&aacute;ginas Linux</TITLE>
+ <LINK HREF="dentro-nucleo-linux-5.html" REL=next>
+ <LINK HREF="dentro-nucleo-linux-3.html" REL=previous>
+ <LINK HREF="dentro-nucleo-linux.html#toc4" REL=contents>
+</HEAD>
+<BODY>
+<A HREF="dentro-nucleo-linux-5.html">Página siguiente</A>
+<A HREF="dentro-nucleo-linux-3.html">Página anterior</A>
+<A HREF="dentro-nucleo-linux.html#toc4">Índice general</A>
+<HR>
+<H2><A NAME="s4">4.</A> <A HREF="dentro-nucleo-linux.html#toc4">Memoria Intermedia de P&aacute;ginas Linux</A></H2>
+
+
+<P>En este cap&iacute;tulo describimos la memoria intermedia de p&aacute;ginas de Linux 2.4. La 
+memoria intermedia de p&aacute;ginas es - como sugiere el nombre - una memoria 
+intermedia de p&aacute;ginas f&iacute;sicas. En el mundo UNIX el concepto de memoria
+intermedia de p&aacute;ginas se convirti&oacute; popular con la introduci&oacute;n de SVR4 UNIX, donde 
+reemplaz&oacute; a la antememoria intermedia para las operaciones de E/S.</P>
+<P>Mientras la memoria intermedia de p&aacute;ginas de SVR4 es s&oacute;lamente usada como 
+memoria intermedia de datos del sistema de ficheros y estos usan la estructura 
+vnode y un desplazamiento dentro del fichero como par&aacute;metros hash, la memoria 
+intermedia de p&aacute;ginas de Linux est&aacute; dise&ntilde;ada para ser m&aacute;s gen&eacute;rica, y entonces 
+usa una estructura address_space (explicada posteriormente) como primer 
+par&aacute;metro. Porque la memoria intermedia de p&aacute;ginas Linux est&aacute; cerradamente 
+emparejada a la notaci&oacute;n del espacio de direcciones, necesitar&aacute;s como m&iacute;nimo un 
+conocimiento previo del adress_spaces para entender la forma en la que trabaja 
+la memoria intermedia de p&aacute;ginas.
+Un address_space es alg&uacute;n tipo de software MMU que mapea todas las
+p&aacute;ginas de un objeto (ej. inodo) a otro concurrentemente (tipicamente
+bloques f&iacute;sicos de disco). La estructura address_space est&aacute; definida en
+<CODE>include/linux/fs.h</CODE> como:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+        struct address_space {
+                struct list_head        clean_pages;
+                struct list_head        dirty_pages;
+                struct list_head        locked_pages;
+                unsigned long           nrpages;
+                struct address_space_operations *a_ops;
+                struct inode            *host;
+                struct vm_area_struct   *i_mmap;
+                struct vm_area_struct   *i_mmap_shared;
+                spinlock_t              i_shared_lock;
+ 
+        };
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Para entender la forma en la que address_spaces trabaja, s&oacute;lo
+necesitamos mirar unos pocos de estos campos:
+<CODE>clean_pages</CODE>, <CODE>dirty_pages</CODE> y <CODE>locked_pages</CODE> son
+listas doblemente enlazadas de p&aacute;ginas limpias, sucias y bloqueadas
+pertenecientes a este address_space, <CODE>nrpages</CODE> es el n&uacute;mero total
+de p&aacute;ginas en este address_space. <CODE>a_ops</CODE>  define los m&eacute;todos de
+este objeto y <CODE>host</CODE> es un puntero perteneciente a este inodo
+address_space - quiz&aacute;s sea NULL, ej. en el caso del swapper (intercambiador)
+address_space (<CODE>mm/swap_state.c,</CODE>).</P>
+<P>El uso de <CODE>clean_pages</CODE>, <CODE>dirty_pages</CODE>,
+<CODE>locked_pages</CODE> y <CODE>nrpages</CODE> es obvio, por lo tanto
+hecharemos un severo vistazo a la estructura
+<CODE>address_space_operations</CODE>, definida en la misma cabecera:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+        struct address_space_operations {
+                int (*writepage)(struct page *);
+                int (*readpage)(struct file *, struct page *);
+                int (*sync_page)(struct page *);
+                int (*prepare_write)(struct file *, struct page *, unsigned, unsigned);
+                int (*commit_write)(struct file *, struct page *, unsigned, unsigned);
+                int (*bmap)(struct address_space *, long);
+        };
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Para una vista b&aacute;sica del principio de address_spaces (y de la memoria intermedia
+de p&aacute;ginas) necesitamos hechar una mirada a -><CODE>writepage</CODE> y
+-><CODE>readpage</CODE>, pero en la pr&aacute;ctica necesitamos tambi&eacute;n mirar en
+-><CODE>prepare_write</CODE> y -><CODE>commit_write</CODE>.</P>
+<P>Probablemente supongas que los m&eacute;todos address_space_operations lo
+hacen en virtud de sus nombres solamente; no obstante, requieren
+hacer alguna explicaci&oacute;n. Su uso en el camino de las E/S de los datos
+de los sistemas de ficheros, por lo lejos del m&aacute;s com&uacute;n camino a
+trav&eacute;s de la memoria intermedia de p&aacute;ginas, suministra una buena forma para entenderlas.
+Como la mayor&iacute;a de otros sistemas operativos del estilo UNIX,
+Linux tiene unas operaciones gen&eacute;ricas de ficheros (un subconjunto de las
+operaciones vnode SYSVish) para los datos E/S a trav&eacute;s de la memoria intermedia de p&aacute;ginas.
+Esto significa que los datos no interact&uacute;an directamente con el sistema
+de ficheros en read/write/mmap, pero ser&aacute;n leidos/escritos desde/a la memoria intermedia
+de p&aacute;ginas cuando sea posible. La memoria intermedia de p&aacute;ginas tiene que obtener datos desde
+el sistema de ficheros actual de bajo nivel en el caso de que el usuario
+quiera leer desde una p&aacute;gina que todav&iacute;a no est&aacute; en memoria, o
+escribir datos al disco en el caso de que la memoria sea insuficiente. </P>
+<P>En el camino de lectura, los m&eacute;todos gen&eacute;ricos primero intentar&aacute;n
+encontrar una p&aacute;gina que corresponda con la pareja buscada de inodo/&iacute;ndice.</P>
+<P>
+<BLOCKQUOTE><CODE>
+hash = page_hash(inode->i_mapping, index);
+</CODE></BLOCKQUOTE>
+</P>
+<P>Entonces testeamos cuando la p&aacute;gina actualmente existe.</P>
+<P>
+<BLOCKQUOTE><CODE>
+hash = page_hash(inode->i_mapping, index);
+page = __find_page_nolock(inode->i_mapping, index, *hash);
+</CODE></BLOCKQUOTE>
+</P>
+<P>Cuando no existe, asignamos una nueva p&aacute;gina, y la a&ntilde;adimos al hash
+de la memoria intermedia de p&aacute;ginas.</P>
+<P>
+<BLOCKQUOTE><CODE>
+page = page_cache_alloc();
+__add_to_page_cache(page, mapping, index, hash);
+</CODE></BLOCKQUOTE>
+</P>
+<P>Despu&eacute;s de que la p&aacute;gina haya sido hashed (ordenada) utilizamos la operaci&oacute;n
+-><CODE>readpage</CODE> address_space para en este instante rellenar la p&aacute;gina
+con datos (el fichero es una instancia abierta del inodo).</P>
+<P>
+<BLOCKQUOTE><CODE>
+error = mapping->a_ops->readpage(file, page);
+</CODE></BLOCKQUOTE>
+</P>
+<P>Finalmente podemos copiar los datos al espacio de usuario.</P>
+<P>Para escribir en el sistema de archivos existen dos formas: una para
+mapeos escribibles (mmap) y otra para la familia de llamadas al sistema
+write(2). El caso mmap es muy simple, por lo tanto ser&aacute; el que primero
+discutamos.
+Cuando un usuario modifica los mapas, el subsistema VM marca la p&aacute;gina
+como sucia.</P>
+<P>
+<BLOCKQUOTE><CODE>
+SetPageDirty(page);
+</CODE></BLOCKQUOTE>
+</P>
+<P>El hilo del n&uacute;cleo bdflush que est&aacute; intentando liberar p&aacute;ginas, como
+actividad en segundo plano o porque no hay suficiente memoria, intentar&aacute;
+llamar a -><CODE>writepage</CODE> en las p&aacute;ginas que est&aacute;n explicitamente
+marcadas como sucias. El m&eacute;todo -><CODE>writepage</CODE>  tiene ahora que
+escribir el contenido de las p&aacute;ginas de vuelta al disco y liberar la
+p&aacute;gina.</P>
+<P>El segundo camino de escritura es _mucho_ m&aacute;s complicado. Para cada
+p&aacute;gina que el usuario escribe, tenemos b&aacute;sicamente que hacer lo
+siguiente: (para el c&oacute;digo completo ver
+<CODE>mm/filemap.c:generic_file_write()</CODE>).</P>
+<P>
+<BLOCKQUOTE><CODE>
+page = __grab_cache_page(mapping, index, &amp;cached_page);
+mapping->a_ops->prepare_write(file, page, offset, offset+bytes);
+copy_from_user(kaddr+offset, buf, bytes);
+mapping->a_ops->commit_write(file, page, offset, offset+bytes);
+</CODE></BLOCKQUOTE>
+</P>
+<P>Por lo tanto intentamos encontrar la p&aacute;gina ordenada o asignar una
+nueva, entonces llamamos al m&eacute;todo -><CODE>prepare_write</CODE>
+address_space, copiamos la antememoria del usuario a la memoria del n&uacute;cleo y
+finalmente llamamos al m&eacute;todo -><CODE>commit_write</CODE>. Tal como
+probablemente has visto ->prepare_write y -><CODE>commit_write</CODE> son
+fundamentalmente diferentes de -><CODE>readpage</CODE> y
+-><CODE>writepage</CODE>, porque ellas no s&oacute;lo son llamadas cuando la E/S
+f&iacute;sica se quiere actualizar sino que son llamadas cada vez que el 
+usuario modifica el fichero.
+Hay dos (¿o m&aacute;s?) formas para manejar esto, la primero es usar la
+antememoria intermedia de Linux para retrasar la E/S f&iacute;sica, rellenando un puntero
+<CODE>page->buffers</CODE> con buffer_heads, que ser&aacute; usado en
+try_to_free_buffers (<CODE>fs/buffers.c</CODE>) para pedir E/S una vez que
+no haya suficientemente memoria, y es usada de forma muy difundida en el
+actual n&uacute;cleo. La otra forma justamente establece la p&aacute;gina como
+sucia y conf&iacute;a en que -><CODE>writepage</CODE> realice todo el trabajo.
+Debido a la carencia de un bitmap de validez en la p&aacute;gina de estructuras,
+esto no realiza todo el trabajo que tiene una granularidad m&aacute;s peque&ntilde;a que
+<CODE>PAGE_SIZE</CODE>.</P>
+
+<HR>
+<A HREF="dentro-nucleo-linux-5.html">Página siguiente</A>
+<A HREF="dentro-nucleo-linux-3.html">Página anterior</A>
+<A HREF="dentro-nucleo-linux.html#toc4">Índice general</A>
+</BODY>
+</HTML>

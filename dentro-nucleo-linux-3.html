@@ -1,0 +1,1526 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<HTML>
+<HEAD>
+ <META NAME="GENERATOR" CONTENT="LinuxDoc-Tools 0.9.21">
+ <TITLE>Dentro del n&uacute;cleo Linux 2.4: Sistemas de Archivos Virtuales (VFS)</TITLE>
+ <LINK HREF="dentro-nucleo-linux-4.html" REL=next>
+ <LINK HREF="dentro-nucleo-linux-2.html" REL=previous>
+ <LINK HREF="dentro-nucleo-linux.html#toc3" REL=contents>
+</HEAD>
+<BODY>
+<A HREF="dentro-nucleo-linux-4.html">Página siguiente</A>
+<A HREF="dentro-nucleo-linux-2.html">Página anterior</A>
+<A HREF="dentro-nucleo-linux.html#toc3">Índice general</A>
+<HR>
+<H2><A NAME="s3">3.</A> <A HREF="dentro-nucleo-linux.html#toc3">Sistemas de Archivos Virtuales (VFS)</A></H2>
+
+
+
+<H2><A NAME="ss3.1">3.1</A> <A HREF="dentro-nucleo-linux.html#toc3.1">Cach&eacute; de Inodos e Interacci&oacute;n con Dcache</A>
+</H2>
+
+
+<P>En orden para soportar m&uacute;ltiples sistemas de archivos, Linux contiene
+un nivel especial de interfaces del n&uacute;cleo llamado VFS (Interruptor de
+Sistemas de Ficheros Virtuales). Esto es muy similar a la interfaz
+vnode/vfs encontrada en los derivados de SVR4 (originalmente
+ven&iacute;an de BSD y de las implementaciones originales de Sun).</P>
+<P>La antememoria de inodos de Linux es implementada en un simple fichero,
+<CODE>fs/inode.c</CODE>, el cual consiste de 977 lineas de c&oacute;digo. Es
+interesante notar que no se han realizado muchos cambios en &eacute;l durante
+los &uacute;ltimos 5-7 a&ntilde;os: uno todav&iacute;a puede reconocer alg&uacute;n c&oacute;digo
+comparando la &uacute;ltima version con, digamos, 1.3.42.</P>
+<P>La estructura de la antememoria de inodos Linux es como sigue:</P>
+<P>
+<OL>
+<LI> Una tabla global hash, <CODE>inode_hashtable</CODE>, donde cada inodo
+es ordenado por el valor del puntero del superbloque y el
+n&uacute;mero de inodo de 32bit. Los inodos sin un superbloque 
+(<CODE>inode->i_sb == NULL</CODE>) son a&ntilde;adidos a la lista
+doblemente enlazada encabezada por <CODE>anon_hash_chain</CODE> en
+su lugar. Ejemplos de inodos an&oacute;nimos son los conectores creados por
+<CODE>net/socket.c:sock_alloc()</CODE>, llamado por 
+<CODE>fs/inode.c:get_empty_inode()</CODE>.
+</LI>
+<LI> Una lista global del tipo "en_uso" (<CODE>inode_in_use</CODE>), la cual 
+contiene los inodos v&aacute;lidos con <CODE>i_count>0</CODE> y
+<CODE>i_nlink>0</CODE>. Los inodos nuevamente asignados por
+<CODE>get_empty_inode()</CODE> y <CODE>get_new_inode()</CODE> son
+a&ntilde;adidos a la lista <CODE>inode_in_use</CODE>.
+</LI>
+<LI> Una lista global del tipo "sin_usar" (<CODE>inode_unused</CODE>), la cual 
+contiene los inodos v&aacute;lidos con <CODE>i_count = 0</CODE>.
+</LI>
+<LI> Una lista por cada superbloque del tipo "sucia" (<CODE>sb->s_dirty</CODE>)
+que contiene los inodos v&aacute;lidos con <CODE>i_count>0</CODE>,
+<CODE>i_nlink>0</CODE> y <CODE>i_state &amp; I_DIRTY</CODE>. Cuando el inodo
+es marcado como sucio, es a&ntilde;adido a la lista
+<CODE>sb->s_dirty</CODE> si el est&aacute; tambi&eacute;n ordenado. Manteniendo una
+lista sucia por superbloque de inodos nos permite r&aacute;pidamente
+sincronizar los inodos.
+</LI>
+<LI> Una antememoria propia de inodos - una antememoria SLAB llamada
+<CODE>inode_cachep</CODE>. Tal como los objetos inodos son asignados
+como libres, ellos son tomados y devueltos a esta antememoria SLAB.</LI>
+</OL>
+</P>
+<P>Los tipos de listas son sujetadas desde <CODE>inode->i_list</CODE>, la tabla
+hash desde <CODE>inode->i_hash</CODE>. Cada inodo puede estar en una tabla
+hash y en uno, y en s&oacute;lo uno, tipo de lista (en_uso, sin_usar o sucia). </P>
+<P>Todas estas listas est&aacute;n protegidas por un spinlock simple:
+<CODE>inode_lock</CODE>.</P>
+<P>El subsistema de cach&eacute; de inodos es inicializado cuando la funci&oacute;n
+<CODE>inode_init()</CODE> es llamada desde
+<CODE>init/main.c:start_kernel()</CODE>. La funci&oacute;n es marcada como
+<CODE>__init</CODE>,  lo que significa que el c&oacute;digo ser&aacute; lanzado
+posteriormente. Se le pasa un argumento simple - el n&uacute;mero de p&aacute;ginas
+f&iacute;sicas en el sistema. Esto es por lo que la antememoria de inodos puede
+configurarse ella misma dependiendo de cuanta memoria est&aacute; disponible,
+esto es, crea una tabla hash m&aacute;s grande si hay suficiente memoria.</P>
+<P>Las &uacute;nicas estad&iacute;sticas de informaci&oacute;n sobre la antememoria de inodos es el
+n&uacute;mero de inodos sin usar, almacenados en
+<CODE>inodes_stat.nr_unused</CODE> y accesibles por los programas de usuario
+a trav&eacute;s de los archivos <CODE>/proc/sys/fs/inode-nr</CODE> y
+<CODE>/proc/sys/fs/inode-state</CODE>.</P>
+<P>Podemos examinar una de las listas desde <B>gdb</B> en un
+n&uacute;cleo en funcionamiento de esta forma:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+(gdb) printf "%d\n", (unsigned long)(&amp;((struct inode *)0)->i_list)
+8
+(gdb) p inode_unused
+$34 = 0xdfa992a8
+(gdb) p (struct list_head)inode_unused
+$35 = {next = 0xdfa992a8, prev = 0xdfcdd5a8}
+(gdb) p ((struct list_head)inode_unused).prev
+$36 = (struct list_head *) 0xdfcdd5a8
+(gdb) p (((struct list_head)inode_unused).prev)->prev
+$37 = (struct list_head *) 0xdfb5a2e8
+(gdb) set $i = (struct inode *)0xdfb5a2e0
+(gdb) p $i->i_ino
+$38 = 0x3bec7
+(gdb) p $i->i_count
+$39 = {counter = 0x0}
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Destacar que restamos 8 de la direcci&oacute;n 0xdfb5a2e8 para obtener la
+direcci&oacute;n de <CODE>struct inode</CODE> (0xdfb5a2e0) de acuerdo a la
+definici&oacute;n de la macro <CODE>list_entry()</CODE> de
+<CODE>include/linux/list.h</CODE>.</P>
+<P>Para entender c&oacute;mo trabaja la antememoria de inodos, d&eacute;janos seguir un tiempo
+de vida de un inodo de un fichero regular en el sistema de ficheros ext2,
+el c&oacute;mo es abierto y c&oacute;mo es cerrado:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+fd = open("file", O_RDONLY);
+close(fd);
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>La llamada al sistema <B>open(2)</B> es implementada en la funci&oacute;n
+<CODE>fs/open.c:sys_open</CODE> y el trabajo real es realizado por la
+funci&oacute;n <CODE>fs/open.c:filp_open()</CODE>, la cual est&aacute; dividida en dos
+partes:</P>
+<P>
+<OL>
+<LI> <CODE>open_namei()</CODE>: rellena la estructura nameidata
+conteniendo las estructuras dentry y vfsmount.
+</LI>
+<LI> <CODE>dentry_open()</CODE>: dado dentry y vfsmount, esta funci&oacute;n
+asigna una nueva <CODE>struct file</CODE> y las enlaza a todas
+ellas; tambi&eacute;n llama al m&eacute;todo espec&iacute;fico del sistema de
+ficheros <CODE>f_op->open()</CODE> el cual fue inicializado en
+<CODE>inode->i_fop</CODE> cuando el inodo fue le&iacute;do en
+<CODE>open_namei()</CODE> (el cual suministra el inodo a trav&eacute;s
+de <CODE>dentry->d_inode</CODE>). </LI>
+</OL>
+</P>
+<P>La funci&oacute;n <CODE>open_namei()</CODE> interact&uacute;a con la antememoria dentry a
+trav&eacute;s de <CODE>path_walk()</CODE>, el cual en el regreso llama a
+<CODE>real_lookup()</CODE>, el cual llama al m&eacute;todo espec&iacute;fico del sistema
+de ficheros <CODE>inode_operations->lookup()</CODE>. La misi&oacute;n de este
+m&eacute;todo es encontrar la entrada en el directorio padre con el nombre
+correcto y entonces hace <CODE>iget(sb, ino)</CODE> para coger el
+correspondiente inodo - el cual nos trae la antememoria de inodos. Cuando el
+inodo es leido, el dentry es instanciado por medio de <CODE>d_add(dentry,
+inode)</CODE>. Mientras estamos en &eacute;l, n&oacute;tese que en los sistemas de
+ficheros del estilo UNIX que tienen el concepto de n&uacute;mero de inodos en
+disco, el trabajo del m&eacute;todo lookup es mapear su bit menos significativo
+al actual formato de la CPU, ej. si el n&uacute;mero de inodos en la entrada del
+directorio sin formato (espec&iacute;fico del sistema de ficheros)  est&aacute; en
+el formato de 32 bits little-endian uno har&iacute;a:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+unsigned long ino = le32_to_cpu(de->inode);
+inode = iget(sb, ino);
+d_add(dentry, inode);
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Por lo tanto, cuando abrimos un fichero nosotros llamamos a
+<CODE>iget(sb, ino)</CODE> el cual es realmente <CODE>iget4(sb, ino, NULL,
+NULL)</CODE>, el cual hace:</P>
+<P>
+<OL>
+<LI> Intenta encontrar un inodo con el superbloque emparejado y el 
+n&uacute;mero de inodo en la tabla hash bajo la protecci&oacute;n de 
+<CODE>inode_lock</CODE>. Si el inodo es encontrado, su cuenta
+de referencia (<CODE>i_count</CODE>) es incrementada; si era 0
+anteriormente al incremento y el inodo no estaba sucio, es
+quitado de cualquier tipo de lista (<CODE>inode->i_list</CODE>) 
+en la que est&eacute; (tiene que estar en la lista
+<CODE>inode_unused</CODE>, por supuesto) e insertado en la lista
+del tipo <CODE>inode_in_use</CODE>; finalmente
+<CODE>inodes_stat.nr_unused</CODE> es decrementado.
+</LI>
+<LI> Si el inodo est&aacute; actualmente bloqueado, esperaremos hasta que se
+desbloquee, por lo tanto est&aacute; garantizado que <CODE>iget4()</CODE> 
+devolver&aacute; un inodo desbloqueado.
+</LI>
+<LI> Si el inodo no fue encontrado en la tabla hash entonces es la 
+primera vez que se pide este inodo, por lo tanto llamamos a 
+<CODE>get_new_inode()</CODE>, pas&aacute;ndole el puntero al sitio de la
+tabla hash donde deber&iacute;a de ser insertado.
+</LI>
+<LI> <CODE>get_new_inode()</CODE> asigna un nuevo inodo desde la antememoria
+SLAB <CODE>inode_cachep</CODE>, pero esta operaci&oacute;n puede bloquear
+(asignaci&oacute;n <CODE>GFP_KERNEL</CODE>), por lo tanto el spinlock
+que guarda la tabla hash tiene que ser quitado. Desde que hemos
+quitado el spinlock, entonces debemos de volver a buscar el
+inodo en la tabla; si esta vez es encontrado, se devuelve 
+(despu&eacute;s de incrementar la referencia por <CODE>__iget</CODE>)
+el que se encontr&oacute; en la tabla hash y se destruye el nuevamente
+asignado. Si a&uacute;n no se ha encontrado en la tabla hash, entonces
+el nuevo inodo que tenemos acaba de ser asignado y es el que va
+a ser usado; entonces es inicializado a los valores requeridos y  
+el m&eacute;todo espec&iacute;fico del sistema de ficheros
+<CODE>sb->s_op->read_inode()</CODE> es llamado para propagar el 
+resto del inodo. Esto nos proporciona desde la antememoria de inodos
+la vuelta al c&oacute;digo del sistema de archivos - recuerda que
+venimos de la antememoria de inodos cuando el m&eacute;todo espec&iacute;fico del
+sistema de ficheros <CODE>lookup()</CODE> llama a <CODE>iget()</CODE>.
+Mientras el m&eacute;todo <CODE>s_op->read_inode()</CODE> est&aacute; leyendo
+el inodo del disco, el inodo est&aacute; bloqueado (<CODE>i_state =
+I_LOCK</CODE>); &eacute;l es desbloqueado despu&eacute;s de que el m&eacute;todo
+<CODE>read_inode()</CODE> regrese y todos los que est&aacute;n esperando 
+por el hayan sido despertados.</LI>
+</OL>
+</P>
+<P>Ahora, veamos que pasa cuando cerramos este descriptor de ficheros. La
+llamada al sistema <B>close(2)</B> est&aacute; implementada en la funci&oacute;n
+<CODE>fs/open.c:sys_close()</CODE>, la cual llama a <CODE>do_close(fd, 1)</CODE> 
+el cual rompe (reemplaza con NULL) el descriptor del descriptor de
+ficheros de la tabla del proceso y llama a la funci&oacute;n <CODE>filp_close()</CODE>, 
+la cual realiza la mayor parte del trabajo. La parte interesante sucede en 
+<CODE>fput()</CODE>, la cual chequea si era la &uacute;ltima referencia al fichero, y si es 
+as&iacute; llama a <CODE>fs/file_table.c:_fput()</CODE> la cual llama a <CODE>__fput()</CODE> en la
+cual es donde sucede la interacci&oacute;n con dcache (y entonces con la memoria 
+intermedia de inodos - ¡recuerda que dcache es la memoria intermedia de 
+inodos Maestra!). El <CODE>fs/dcache.c:dput()</CODE> hace <CODE>dentry_iput()</CODE> 
+la cual nos brinda la vuelta a la memoria intermedia de inodos a trav&eacute;s de 
+<CODE>iput(inode)</CODE>, por lo tanto d&eacute;janos entender <CODE>fs/inode.c:iput(inode)</CODE>:</P>
+<P>
+<OL>
+<LI> Si el par&aacute;metro pasado a nosotros es NULL, no hacemos nada y
+regresamos.
+</LI>
+<LI> Si hay un m&eacute;todo espec&iacute;fico del sistema de archivos 
+<CODE>sb->s_op->put_inode()</CODE>, es llamada inmediatamente sin
+mantener ning&uacute;n spinlock (por lo tanto puede bloquear).
+</LI>
+<LI> El spinlock <CODE>inode_lock</CODE> es tomado y <CODE>i_count</CODE> es
+decrementado. Si NO era la &uacute;ltima referencia a este inodo
+entonces simplemente chequeamos si hay muchas referencias a el 
+y entonces <CODE>i_count</CODE> puede urdir sobre los 32 bits 
+asignados a el si por lo tanto podemos imprimir un mensaje
+de peligro y regresar. N&oacute;tese que llamamos a <CODE>printk()</CODE> 
+mientras mantenemos el spinlock <CODE>inode_lock</CODE> - esto est&aacute;
+bien porque <CODE>printk()</CODE> nunca bloquea, entonces
+puede ser llamado absolutamente en cualquier contexto (¡incluso
+desde el manejador de interrupciones!).
+</LI>
+<LI> Si era la &uacute;ltima referencia activa entonces alg&uacute;n trabajo
+necesita ser realizado.</LI>
+</OL>
+</P>
+<P>EL trabajo realizado por <CODE>iput()</CODE> en la &uacute;ltima referencia del
+inodo es bastante complejo, por lo tanto lo separaremos en una lista de
+si misma:</P>
+<P>
+<OL>
+<LI> Si <CODE>i_nlink == 0</CODE> (ej. el fichero fu&eacute; desenlazado mientras
+lo manten&iacute;amos abierto) entonces el inodo es quitado de la tabla
+hash y de su lista de tipos; si hay alguna p&aacute;gina de datos
+mantenida en la antememoria de p&aacute;ginas para este inodo, son borradas
+por medio de <CODE>truncate_all_inode_pages(&amp;inode->i_data)</CODE>. 
+Entonces el m&eacute;todo espec&iacute;fico del sistema de archivos 
+<CODE>s_op->delete_inode()</CODE> es llamado, el cual t&iacute;picamente
+borra la copia en disco del inodo. Si no hay un m&eacute;todo
+<CODE>s_op->delete_inode()</CODE> registrado por el sistema de 
+ficheros (ej. ramfs) entonces llamamos a
+<CODE>clear_inode(inode)</CODE>, el cual llama
+<CODE>s_op->clear_inode()</CODE> si est&aacute; registrado y si un inodo
+corresponde a un dispositivo de bloques, esta cuenta de
+referencia del dispositivo es borrada por
+<CODE>bdput(inode->i_bdev)</CODE>.
+</LI>
+<LI> Si <CODE>i_nlink != 0</CODE> entonces chequeamos si hay otros inodos
+en el mismo cubo hash y si no hay ninguno, entonces si el inodo
+no est&aacute; sucio lo borramos desde su tipo de lista y lo a&ntilde;adimos
+a la lista <CODE>inode_unused</CODE> incrementando
+<CODE>inodes_stat.nr_unused</CODE>. Si hay inodos en el mismo cubo
+hash entonces los borramos de la lista de tipo y lo a&ntilde;adimos a
+la lista <CODE>inode_unused</CODE>. Si no hab&iacute;a ning&uacute;n inodo 
+(NetApp .snapshot) entonces lo borramos de la lista de tipos  y
+lo limpiamos/destruimos completamente.</LI>
+</OL>
+</P>
+
+<H2><A NAME="ss3.2">3.2</A> <A HREF="dentro-nucleo-linux.html#toc3.2">Registro/Desregistro de sistemas de Ficheros</A>
+</H2>
+
+
+<P>El n&uacute;cleo Linux suministra un mecanismo para los nuevos sistemas de
+ficheros para ser escritos con el m&iacute;nimo esfuerzo. Los motivos
+hist&oacute;ricos para esto son:</P>
+<P>
+<OL>
+<LI> En el mundo donde la gente a&uacute;n usa sistemas operativos no Linux
+para proteger sus inversiones en el software legado, Linux tiene
+que suministrar interoperabilidad para soportar una gran
+multitud de sistemas de ficheros diferentes - la mayor&iacute;a no
+merecen existir pero s&oacute;lo por compatibilidad con los
+existentes sistemas operativos no Linux. 
+</LI>
+<LI> La interfaz para los escritores de sistemas de ficheros tiene
+que ser muy simple para que la gente pueda intentar hacer ingenier&iacute;a
+inversa con los sistemas de ficheros existentes para escribir
+versiones de s&oacute;lo lectura de ellos. Entonces el VFS de Linux 
+hace muy f&aacute;cil implementar sistemas de ficheros de s&oacute;lo lectura:
+el 95% del trabajo est&aacute; por finalizar a&ntilde;adi&eacute;ndole un soporte total
+para escritura. Como un ejemplo concreto le&iacute; sistemas de
+ficheros BFS para Linux en modo s&oacute;lo lectura en unas 10
+horas, pero llev&oacute; varias semanas completarlo para tener un
+soporte total de escritura (e incluso hoy algunos puristas dicen
+que no est&aacute; completo porque no tiene soporte de compactaci&oacute;n). 
+</LI>
+<LI> La interfaz VFS es exportada, y entonces todos los sistemas de 
+ficheros Linux pueden ser implementados como m&oacute;dulos.</LI>
+</OL>
+</P>
+<P>D&eacute;janos considerar los pasos requeridos para implementar un sistema de
+ficheros bajo Linux. El c&oacute;digo para implementar un sistema de ficheros
+puede ser un m&oacute;dulo din&aacute;micamente cargado o est&aacute;r est&aacute;ticamente
+enlazado en el n&uacute;cleo, el camino es realizado por Linux
+trasparentemente. Todo lo que se necesita es rellenar una estructura
+<CODE>struct file_system_type</CODE> y registrarla con el VFS usando la
+funci&oacute;n <CODE>register_filesystem()</CODE> como en el siguiente ejemplo de
+<CODE>fs/bfs/inode.c</CODE>:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+#include &lt;linux/module.h>
+#include &lt;linux/init.h>
+
+static struct super_block *bfs_read_super(struct super_block *, void *, int);
+
+static DECLARE_FSTYPE_DEV(bfs_fs_type, "bfs", bfs_read_super);
+
+static int __init init_bfs_fs(void)
+{
+        return register_filesystem(&amp;bfs_fs_type);
+}
+
+static void __exit exit_bfs_fs(void)
+{
+        unregister_filesystem(&amp;bfs_fs_type);
+}
+
+module_init(init_bfs_fs)
+module_exit(exit_bfs_fs)
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Las macros <CODE>module_init()/module_exit()</CODE> aseguran que, cuando BFS
+es compilado como un m&oacute;dulo, las funciones <CODE>init_bfs_fs()</CODE> y
+<CODE>exit_bfs_fs()</CODE> se convierten en <CODE>init_module()</CODE> y
+<CODE>cleanup_module()</CODE> respectivamente; si BFS est&aacute; est&aacute;ticamente 
+enlazado en el n&uacute;cleo el c&oacute;digo <CODE>exit_bfs_fs()</CODE> lo hace
+innecesario.</P>
+<P>La <CODE>struct file_system_type</CODE> es declarada en
+<CODE>include/linux/fs.h</CODE>:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct file_system_type {
+        const char *name;
+        int fs_flags;
+        struct super_block *(*read_super) (struct super_block *, void *, int);
+        struct module *owner;
+        struct vfsmount *kern_mnt; /* For kernel mount, if it's FS_SINGLE fs */
+        struct file_system_type * next;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Los campos anteriores son explicados de esta forma:</P>
+<P>
+<UL>
+<LI><B>name</B>: nombre humano le&iacute;ble, aparece en el fichero
+<CODE>/proc/filesystems</CODE> y es usado como clave para encontrar
+un sistema de ficheros por su nombre; este mismo nombre es
+usado por el tipo de sistema de ficheros en <B>mount(2)</B>,
+y deber&iacute;a de ser &uacute;nico; (obviamente) s&oacute;lo puede haber un
+sistema de ficheros con un nombre dado. Para los m&oacute;dulos,
+los nombres de los punteros al espacio de direcciones del
+m&oacute;dulo no son copiados: esto significa que 
+<B>cat /proc/filesystems</B> puede fallar si el m&oacute;dulo fue
+descargado pero el sistema de ficheros a&uacute;n est&aacute; registrado.
+</LI>
+<LI><B>fs_flags</B>: una o mas (ORed) de las banderas:
+<CODE>FS_REQUIRES_DEV</CODE> para sistemas de ficheros que s&oacute;lo
+pueden ser montados como dispositivos de bloque,
+<CODE>FS_SINGLE</CODE> para sistemas de ficheros que pueden tener
+s&oacute;lo un superbloque, <CODE>FS_NOMOUNT</CODE> para los sistemas de
+ficheros que no pueden ser montados desde el espacio de usuario
+por medio de la llamada al sistema <B>mount(2)</B>: ellos
+pueden de todas formas ser montados internamente usando la
+interfaz <CODE>kern_mount()</CODE>, ej, pipefs.
+</LI>
+<LI><B>read_super</B>: un puntero a la funci&oacute;n que lee el superbloque
+durante la operaci&oacute;n de montaje. Esta funci&oacute;n es requerida;
+si no es suministrada, la operaci&oacute;n de montaje (desde el espacio
+de usuario o desde el n&uacute;cleo) fallar&aacute; siempre excepto en el caso
+<CODE>FS_SINGLE</CODE> donde fallar&aacute; en
+<CODE>get_sb_single()</CODE>, intentando desreferenciar un puntero
+a NULL en <CODE>fs_type->kern_mnt->mnt_sb</CODE> con
+(<CODE>fs_type->kern_mnt = NULL</CODE>).
+</LI>
+<LI><B>owner</B>: puntero al m&oacute;dulo que implementa este sistema de
+ficheros. Si el sistema de ficheros est&aacute; enlazado
+est&aacute;ticamente en el n&uacute;cleo entonces esto es NULL. No
+necesitas establecer esto manualmente puesto que la macro
+<CODE>THIS_MODULE</CODE> lo hace autom&aacute;ticamente.
+</LI>
+<LI><B>kern_mnt</B>: s&oacute;lo para sistemas de ficheros
+<CODE>FS_SINGLE</CODE>. Esto es establecido por
+<CODE>kern_mount()</CODE> (POR HACER: <CODE>kern_mount()</CODE>
+deber&iacute;a de rechazar montar sistemas de ficheros si
+<CODE>FS_SINGLE</CODE> no est&aacute; establecido).
+</LI>
+<LI><B>next</B>: enlaza a la cabecera de la lista simplemente
+enlazada <CODE>file_systems</CODE> (ver <CODE>fs/super.c</CODE>).
+La lista est&aacute; protegida por el spinlock read-write
+<CODE>file_systems_lock</CODE> y las funciones
+<CODE>register/unregister_filesystem()</CODE> modificada
+por el enlace y desenlace de la entrada de la lista.</LI>
+</UL>
+</P>
+<P>El trabajo de la funci&oacute;n <CODE>read_super()</CODE> es la de rellenar los
+campos del superbloque, asignando el inodo raiz e inicializando cualquier
+informaci&oacute;n privada del sistema de ficheros asociadas por esta instancia
+montada del sistema de ficheros. Por lo tanto, tipicamente el
+<CODE>read_super()</CODE> har&aacute;:</P>
+<P>
+<OL>
+<LI> Lee el superbloque desde el dispositivo especificado a trav&eacute;s
+del argumento <CODE>sb->s_dev</CODE>, usando la funci&oacute;n de la antememoria
+intermedia <CODE>bread()</CODE>. Si se anticipa a leer unos pocos
+m&aacute;s bloques de metadatos inmediatamente subsecuentes, entonces
+tiene sentido usar <CODE>breada()</CODE> para planificar el leer 
+bloque extra de forma as&iacute;ncrona. 
+</LI>
+<LI> Verifica que el superbloque contiene el n&uacute;mero m&aacute;gico v&aacute;lido y 
+todo "parece" correcto.
+</LI>
+<LI> Inicializa <CODE>sb->s_op</CODE> para apuntar a la estructura
+<CODE>struct super_block_operations</CODE>. Esta estructura 
+contiene las funciones espec&iacute;ficas del sistema de ficheros
+implementando las operaciones como "leer inodo", "borrar 
+inodo", etc.
+</LI>
+<LI> Asigna el inodo y dentry raiz usando <CODE>d_alloc_root()</CODE>.
+</LI>
+<LI> Si el sistema de ficheros no est&aacute; montado como s&oacute;lo lectura
+entonces establece <CODE>sb->s_dirt</CODE> a 1 y marca la
+antememoria conteniendo el superbloque como sucio (POR HACER: ¿porqu&eacute;
+hacemos esto? Yo lo hice en BFS porque MINIX lo hizo ...)</LI>
+</OL>
+</P>
+
+<H2><A NAME="ss3.3">3.3</A> <A HREF="dentro-nucleo-linux.html#toc3.3">Administraci&oacute;n de Descriptores de Ficheros</A>
+</H2>
+
+
+<P>Bajo Linux hay varios niveles de rodeos entre el descriptor de ficheros
+del usuario y la estructura de inodos del n&uacute;cleo. Cuando un proceso
+realiza la llamada al sistema <B>open(2)</B>, el n&uacute;cleo devuelve un
+entero peque&ntilde;o no negativo el cual puede ser usado para operaciones de
+E/S subsecuentes en este fichero. Cada estructura de fichero apunta a
+dentry a trav&eacute;s de <CODE>file->f_dentry</CODE>. Y cada dentry apunta a un
+inodo a trav&eacute;s de <CODE>dentry->d_inode</CODE>. </P>
+<P>Cada tarea contiene un campo <CODE>tsk->files</CODE> el cual es un puntero a
+<CODE>struct files_struct</CODE> definida en <CODE>include/linux/sched.h</CODE>:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+/*
+ * Abre la estructura tabla del fichero
+ */
+struct files_struct {
+        atomic_t count;
+        rwlock_t file_lock;
+        int max_fds;
+        int max_fdset;
+        int next_fd;
+        struct file ** fd;      /* actualmente una matriz de descriptores de ficheros */
+        fd_set *close_on_exec;
+        fd_set *open_fds;
+        fd_set close_on_exec_init;
+        fd_set open_fds_init;
+        struct file * fd_array[NR_OPEN_DEFAULT];
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>El <CODE>file->count</CODE> es una cuenta de referencia, incrementada por
+<CODE>get_file()</CODE> (usualmente llamada por <CODE>fget()</CODE>) y
+decrementada por <CODE>fput()</CODE> y por <CODE>put_filp()</CODE>. La
+diferencia entre <CODE>fput()</CODE> y <CODE>put_filp()</CODE> es que
+<CODE>fput()</CODE> hace m&aacute;s trabajo usualmente necesitado para ficheros
+regulares, como la liberaci&oacute;n de conjuntos de bloqueos, liberaci&oacute;n de
+dentry, etc, mientras que <CODE>put_filp()</CODE> es s&oacute;lo para manipular las
+estructuras de tablas de ficheros, esto es, decrementa la cuenta, quita
+el fichero desde <CODE>anon_list</CODE> y lo a&ntilde;ade a la <CODE>free_list</CODE>,
+bajo la protecci&oacute;n del spinlock <CODE>files_lock</CODE>.</P>
+<P>El <CODE>tsk->files</CODE> puede ser compartido entre padre e hijo si el
+hilo hijo fue creado usando la llamada al sistema <CODE>clone()</CODE> con
+la bandera <CODE>CLONE_FILES</CODE> establecida en los argumentos de las
+banderas de clone. Esto puede ser visto en
+<CODE>kernel/fork.c:copy_files()</CODE> (llamada por <CODE>do_fork()</CODE>) el
+cual s&oacute;lo incrementa el <CODE>file->count</CODE> si <CODE>CLONE_FILES</CODE>
+est&aacute; establecido, en vez de la copia usual de la tabla de descriptores
+de ficheros en la tradici&oacute;n respetable en el tiempo de los
+cl&aacute;sicos <B>fork(2)</B> de UNIX.</P>
+<P>Cuando un fichero es abierto, la estructura del fichero asignada para &eacute;l
+es instalada en el slot <CODE>current->files->fd[fd]</CODE> y un bit
+<CODE>fd</CODE> es establecido en el bitmap
+<CODE>current->files->open_fds</CODE>. Todo esto es realizado bajo la
+protecci&oacute;n de escritura del spinlock read-write
+<CODE>current->files->file_lock</CODE>. Cuando el descriptor es cerrado un
+bit <CODE>fd</CODE> es limpiado en <CODE>current->files->open_fds</CODE> y
+<CODE>current->files->next_fd</CODE> es establecido igual a <CODE>fd</CODE>
+como una indicaci&oacute;n para encontrar el primer descriptor sin usar la
+pr&oacute;xima vez que este proceso quiera abrir un fichero.</P>
+
+<H2><A NAME="ss3.4">3.4</A> <A HREF="dentro-nucleo-linux.html#toc3.4">Administraci&oacute;n de estructuras de ficheros</A>
+</H2>
+
+
+<P>La estructura de ficheros es declarada en <CODE>include/linux/fs.h</CODE>:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct fown_struct {
+        int pid;                /* pid o -pgrp donde SIGIO deber&iacute;a de ser enviado  */
+        uid_t uid, euid;        /* uid/euid del proceso estableciendo el due&ntilde;o */
+        int signum;             /* posix.1b rt se&ntilde;al para ser enviada en ES */
+};
+
+struct file {
+        struct list_head        f_list;
+        struct dentry           *f_dentry;
+        struct vfsmount         *f_vfsmnt;
+        struct file_operations  *f_op;
+        atomic_t                f_count;
+        unsigned int            f_flags;
+        mode_t                  f_mode;
+        loff_t                  f_pos;
+        unsigned long           f_reada, f_ramax, f_raend, f_ralen, f_rawin;
+        struct fown_struct      f_owner;
+        unsigned int            f_uid, f_gid;
+        int                     f_error;
+
+        unsigned long           f_version;
+  
+        /* necesitado para este controlador tty, y quiz&aacute;s por otros */
+        void                    *private_data; 
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>D&eacute;janos mirar varios de los campos de <CODE>struct file</CODE>:</P>
+<P>
+<OL>
+<LI><B>f_list</B>: este campo enlaza la estructura del fichero con
+una (y s&oacute;lo una) de las listas: a) <CODE>sb->s_files</CODE> lista
+de todos los ficheros abiertos en este sistema de ficheros, si
+el correspondiente inodo no es an&oacute;nimo, entonces
+<CODE>dentry_open()</CODE> (llamado por <CODE>filp_open()</CODE>)
+enlaza el fichero en esta lista;
+b) <CODE>fs/file_table.c:free_list</CODE>, conteniendo las
+estructuras de ficheros sin utilizar;
+c) <CODE>fs/file_table.c:anon_list</CODE>, cuando una nueva
+estructura de ficheros es creada por <CODE>get_empty_filp()</CODE>
+es colocada en esta lista. Todas estas listas son 
+protegidas por el spinlock <CODE>files_lock</CODE>.
+</LI>
+<LI><B>f_dentry</B>: la dentry (entrada de directorio) correspondiente a este fichero.
+La dentry es creada en tiempo de b&uacute;squeda de nombre y datos (nameidata) por
+<CODE>open_namei()</CODE> (o m&aacute;s bien <CODE>path_walk()</CODE> la cual
+lo llama a &eacute;l) pero el campo actual <CODE>file->f_dentry</CODE> es
+establecido por <CODE>dentry_open()</CODE> para contener la dentry
+de esta forma encontrada.
+</LI>
+<LI><B>f_vfsmnt</B>: el puntero a la estructura <CODE>vfsmount</CODE>
+del sistema de ficheros conteniendo el fichero. Esto es
+establecido por <CODE>dentry_open()</CODE>, pero es encontrado como
+una parte de la b&uacute;squeda de nameidata por <CODE>open_namei()</CODE> (o
+m&aacute;s bien <CODE>path_init()</CODE> la cual lo llama a &eacute;l).
+</LI>
+<LI><B>f_op</B>: el puntero a <CODE>file_operations</CODE>, el cual 
+contiene varios m&eacute;todos que pueden ser llamados desde el
+fichero. Esto es copiado desde <CODE>inode->i_fop</CODE> que
+es colocado aqu&iacute; durante la b&uacute;squeda nameidata. Miraremos
+los m&eacute;todos <CODE>file_operations</CODE> en detalle m&aacute;s tarde
+en esta secci&oacute;n.
+        </LI>
+<LI><B>f_count</B>: cuenta de referencia manipulada por 
+<CODE>get_file/put_filp/fput</CODE>.
+</LI>
+<LI><B>f_flags</B>: banderas <CODE>O_XXX</CODE> desde la llamada al
+sistema <B>open(2)</B> copiadas all&iacute; (con ligeras
+modificaciones de <CODE>filp_open()</CODE>) por
+<CODE>dentry_open()</CODE> y despu&eacute;s de limpiar <CODE>O_CREAT</CODE>,
+<CODE>O_EXCL</CODE>, <CODE>O_NOCTTY</CODE>, <CODE>O_TRUNC</CODE> - no hay 
+sitio para almacenar estas banderas permanentemente ya que
+no pueden ser modificadas por las llamadas 
+<B>fcntl(2)</B> <CODE>F_SETFL</CODE> (o  consultadas por
+<CODE>F_GETFL</CODE>).
+</LI>
+<LI><B>f_mode</B>: una combinaci&oacute;n de banderas del espacio de
+usuario y modos, establecido por <CODE>dentry_open()</CODE>.
+El punto de conversi&oacute;n es almacenar los accesos de lectura y 
+escritura en bits separados, por lo tanto uno los chequear&iacute;a 
+f&aacute;cilmente como <CODE>(f_mode &amp; FMODE_WRITE)</CODE> y
+<CODE>(f_mode &amp; FMODE_READ)</CODE>.
+</LI>
+<LI><B>f_pos</B>: la actual posici&oacute;n en el fichero para la siguiente
+lectura o escritura. Bajo i386 es del tipo
+<CODE>long long</CODE>, esto es un valor de 64 bits.
+</LI>
+<LI><B>f_reada, f_ramax, f_raend, f_ralen, f_rawin</B>: para
+soportar readahead - muy complejo para ser discutido por
+mortales ;)
+</LI>
+<LI><B>f_owner</B>: due&ntilde;o del archivo de E/S a recibir las
+modificaciones de E/S as&iacute;ncronas a trav&eacute;s del mecanismo
+<CODE>SIGIO</CODE> (ver <CODE>fs/fcntl.c:kill_fasync()</CODE>).
+</LI>
+<LI><B>f_uid, f_gid</B> - establece el identificador del usuario y
+el identificador del grupo del proceso que abri&oacute; el fichero,
+cuando la estructura del fichero es creada por
+<CODE>get_empty_filp()</CODE>. Si el fichero es un conector,
+usado por netfilter ipv4.
+</LI>
+<LI><B>f_error</B>: usado por el cliente NFS para devolver errores
+de escritura. Esto es establecido en <CODE>fs/nfs/file.c</CODE> 
+y chequeado en <CODE>mm/filemap.c:generic_file_write()</CODE>.
+</LI>
+<LI><B>f_version</B> - mecanismo de versionado para la invalidaci&oacute;n
+de antememorias, incrementado (usando un <CODE>event</CODE> global)
+cuando cambia <CODE>f_pos</CODE>.
+</LI>
+<LI><B>private_data</B>: datos privados para cada fichero, los cuales
+pueden ser usados por los sistemas de ficheros (ej. coda
+almacena las credenciales aqu&iacute;) o por otros controladores de
+dispositivos. Los controladores de dispositivos (en la
+presencia de devfs) pueden usar este campo para diferenciar
+entre m&uacute;ltiples instancias, en vez del cl&aacute;sico n&uacute;mero menor
+codificado en <CODE>file->f_dentry->d_inode->i_rdev</CODE>.
+          </LI>
+</OL>
+</P>
+<P>Ahora d&eacute;janos mirar en la estructura <CODE>file_operations</CODE> la cual
+contiene los m&eacute;todos que ser&aacute;n llamados en los archivos. D&eacute;janos
+recalcar que es copiado desde <CODE>inode->i_fop</CODE> donde es
+establecido por el m&eacute;todo <CODE>s_op->read_inode()</CODE>. Se declara
+en <CODE>include/linux/fs.h</CODE>:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct file_operations {
+        struct module *owner;
+        loff_t (*llseek) (struct file *, loff_t, int);
+        ssize_t (*read) (struct file *, char *, size_t, loff_t *);
+        ssize_t (*write) (struct file *, const char *, size_t, loff_t *);
+        int (*readdir) (struct file *, void *, filldir_t);
+        unsigned int (*poll) (struct file *, struct poll_table_struct *);
+        int (*ioctl) (struct inode *, struct file *, unsigned int, unsigned long);
+        int (*mmap) (struct file *, struct vm_area_struct *);
+        int (*open) (struct inode *, struct file *);
+        int (*flush) (struct file *);
+        int (*release) (struct inode *, struct file *);
+        int (*fsync) (struct file *, struct dentry *, int datasync);
+        int (*fasync) (int, struct file *, int);
+        int (*lock) (struct file *, int, struct file_lock *);
+        ssize_t (*readv) (struct file *, const struct iovec *, unsigned long, loff_t *);
+        ssize_t (*writev) (struct file *, const struct iovec *, unsigned long, loff_t *);
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>
+<OL>
+<LI><B>owner</B>: un puntero al m&oacute;dulo que es due&ntilde;o del subsistema
+en cuesti&oacute;n. S&oacute;lo los controladores necesitan establecerlo a 
+<CODE>THIS_MODULE</CODE>, los sistemas de ficheros puede felizmente
+ignorarlos porque sus cuentas de m&oacute;dulos son controladas en
+el tiempo de montaje/desmontaje, en cambio los controladores
+necesitan controlarlo en tiempo de apertura/liberaci&oacute;n.
+</LI>
+<LI><B>llseek</B>: implementa la llamada al sistema
+<B>lseek(2)</B>. Usualmente es omitida y es usada
+<CODE>fs/read_write.c:default_llseek()</CODE>, la cual hace lo 
+correcto (POR HACER: fuerza a todos aquellos que establecen a 
+NULL actualmente a usar default_llseek - que es el camino por el
+que salvamos una <CODE>if()</CODE> en <CODE>llseek()</CODE>).
+</LI>
+<LI><B>read</B>: implementa la llamada al sistema <CODE>read(2)</CODE>.
+Los sistemas de ficheros pueden usar
+<CODE>mm/filemap.c:generic_file_read()</CODE> para ficheros
+regulares y <CODE>fs/read_write.c:generic_read_dir()</CODE>
+(la cual simplemente devuelve <CODE>-EISDIR</CODE>) para directorios
+aqu&iacute;.
+</LI>
+<LI><B>write</B>: implementa la llamada al sistema
+<B>write(2)</B>. Los sistemas de ficheros pueden usar
+<CODE>mm/filemap.c:generic_file_write()</CODE>  para ficheros
+regulares e ignorarlo para directorios aqu&iacute;.
+      </LI>
+<LI><B>readdir</B>: usado por los sistema de ficheros. Ignorado por
+los ficheros regulares e implementa las llamadas al sistema
+<B>readdir(2)</B> y <B>getdents(2)</B> para directorios.
+</LI>
+<LI><B>poll</B>: implementa las llamadas al sistema
+<B>poll(2)</B> y <B>select(2)</B>.
+</LI>
+<LI><B>ioctl</B>: implementa el controlador o los ioctls espec&iacute;ficos
+del sistema de ficheros. N&oacute;tese que los ioctls
+gen&eacute;ricos de los ficheros como <CODE>FIBMAP</CODE>,
+<CODE>FIGETBSZ</CODE>, <CODE>FIONREAD</CODE> son implementados por
+niveles m&aacute;s altos y por lo tanto nunca leer&aacute;n el m&eacute;todo 
+<CODE>f_op->ioctl()</CODE>.
+</LI>
+<LI><B>mmap</B>: implementa la llamada al sistema <B>mmap(2)</B>.
+Los sistemas de ficheros pueden usar aqu&iacute;
+<B>generic_file_mmap</B> para ficheros regulares e ignorarlo
+en los directorios.
+</LI>
+<LI><B>open</B>: llamado en tiempo de <B>open(2)</B> por 
+<CODE>dentry_open()</CODE>. Los sistemas de ficheros raramente
+usan esto, ej. coda intenta almacenar el fichero localmente
+en tiempo de apertura.
+</LI>
+<LI><B>flush</B>: llamada en cada <B>close(2)</B> de este fichero,
+no necesariamente el &uacute;ltimo (ver el m&eacute;todo <CODE>release()</CODE>
+a continuaci&oacute;n). El &uacute;nico sistema de ficheros que lo utiliza es
+en un cliente NFS para pasar a disco todas las p&aacute;ginas sucias.
+N&oacute;tese que esto puede devolver un error el cual ser&aacute; retornado
+al espacio de usuario que realiz&oacute; la llamada al sistema
+<B>close(2)</B>.
+</LI>
+<LI><B>release</B>:llamado por la &uacute;ltima <B>close(2)</B> de este
+fichero, esto es cuando <CODE>file->f_count</CODE> llega a 0.
+Aunque definido como un entero de retorno, el valor de retorno 
+es ignorado por VFS (ver <CODE>fs/file_table.c:__fput()</CODE>).
+</LI>
+<LI><B>fsync</B>: mapea directamente a las llamadas al sistema 
+<B>fsync(2)/fdatasync(2)</B>, con el &uacute;ltimo argumento 
+especificando cuando es fsync o fdatasync. Por lo menos no se
+realiza trabajo por VFS sobre esto, excepto el mapear el
+descriptor del fichero a una estructura de fichero (<CODE>file =
+fget(fd)</CODE>) y bajar/subir el sem&aacute;foro <CODE>inode->i_sem</CODE>.
+El sistema de ficheros Ext2 ignora el &uacute;ltimo argumento y
+realiza lo mismo para <B>fsync(2)</B> y <B>fdatasync(2)</B>.
+</LI>
+<LI><B>fasync</B>: este m&eacute;todo es llamado cuando cambia
+<CODE>file->f_flags &amp; FASYNC</CODE>.
+</LI>
+<LI><B>lock</B>: parte del mecanismo de bloqueo de la regi&oacute;n del
+<B>fcntl(2)</B> POSIX de la porci&oacute;n espec&iacute;fica del sistema de
+ficheros. El &uacute;nico fallo aqu&iacute; es porque es llamado antes por
+una porci&oacute;n independiente del sistema de ficheros
+(<CODE>posix_lock_file()</CODE>), si tiene &eacute;xito pero el c&oacute;digo de
+bloqueo estandart POSIX falla, entonces nunca ser&aacute; desbloqueado          
+en un nivel dependiente del sistema de ficheros...
+      </LI>
+<LI><B>readv</B>: implementa la llamada al sistema <B>readv(2)</B>.
+</LI>
+<LI><B>writev</B>: implementa la llamada al sistema
+<B>writev(2)</B>.</LI>
+</OL>
+</P>
+
+<H2><A NAME="ss3.5">3.5</A> <A HREF="dentro-nucleo-linux.html#toc3.5">Administraci&oacute;n de Puntos de Montaje y Superbloque</A>
+</H2>
+
+
+<P>Bajo Linux, la informaci&oacute;n sobre los sistemas de ficheros montados es
+mantenida en dos estructuras separadas - <CODE>super_block</CODE> y
+<CODE>vfsmount</CODE>. El motivo para esto es que Linux permite montar el
+mismo sistema de ficheros (dispositivo de bloque) bajo m&uacute;ltiples puntos
+de montaje, lo cual significa que el mismo <CODE>super_block</CODE> puede
+corresponder a m&uacute;ltiples estructuras <CODE>vfsmount</CODE>.</P>
+<P>D&eacute;janos mirar primero en <CODE>struct super_block</CODE>, declarado en
+<CODE>include/linux/fs.h</CODE>:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct super_block {
+        struct list_head        s_list;         /* Mantiene esto primero */
+        kdev_t                  s_dev;
+        unsigned long           s_blocksize;
+        unsigned char           s_blocksize_bits;
+        unsigned char           s_lock;
+        unsigned char           s_dirt;
+        struct file_system_type *s_type;
+        struct super_operations *s_op;
+        struct dquot_operations *dq_op;
+        unsigned long           s_flags;
+        unsigned long           s_magic;
+        struct dentry           *s_root;
+        wait_queue_head_t       s_wait;
+
+        struct list_head        s_dirty;        /* inodos sucios */
+        struct list_head        s_files;
+
+        struct block_device     *s_bdev;
+        struct list_head        s_mounts;       /* vfsmount(s) de este */
+        struct quota_mount_options s_dquot;     /* Opciones Espec&iacute;ficas de Diskquota */
+
+       union {
+                struct minix_sb_info    minix_sb;
+                struct ext2_sb_info     ext2_sb;
+                ..... todos los sistemas de archivos necesitan sb-private ...
+                void                    *generic_sbp;
+        } u;
+       /*
+         * El siguiente campo es *s&oacute;lo* para VFS. Los sistemas de ficheros
+         * no tienen trabajo alguno mirando en &eacute;l. Has sido avisado.
+         */
+        struct semaphore s_vfs_rename_sem;      /* Truco */
+
+        /* El siguiente campo es usado por knfsd cuando convierte un
+         * manejador de ficheros (basado en el n&uacute;mero de inodo) en
+         * una dentry. Tal como construye un camino en el &aacute;rbol dcache
+         * desde el fondo hasta arriba, quiz&aacute;s exista durante alg&uacute;n 
+         * tiempo un subcamino de dentrys que no est&aacute;n conectados al
+         * &aacute;rbol principal. Este sem&aacute;foro asegura que hay s&oacute;lo
+         * siempre un camino libre por sistema de ficheros. N&oacute;tese que
+         * los ficheros no conectados (o otros no directorios) son
+         * permitidos, pero no los directorios no conectados.
+         */
+        struct semaphore s_nfsd_free_path_sem;
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Las diversos campos en la estructura <CODE>super_block</CODE> son:</P>
+<P>
+<OL>
+<LI><B>s_list</B>: una lista doblemente enlazada de todos los
+superbloques activos; n&oacute;tese que no he dicho "de todos los
+sistemas de ficheros montados" porque bajo Linux uno puede
+tener m&uacute;ltiples instancias de un sistema de ficheros montados
+correspondientes a un superbloque simple.
+</LI>
+<LI><B>s_dev</B>: para sistemas de ficheros que requieren un bloque
+para ser montado en &eacute;l. Esto es para los sistemas de ficheros
+<CODE>FS_REQUIRES_DEV</CODE>, esto es la <CODE>i_dev</CODE> del
+dispositivo de bloques. Para otros (llamados sistemas de
+ficheros an&oacute;nimos) esto es un entero <CODE>MKDEV(UNNAMED_MAJOR,
+i)</CODE> donde <CODE>i</CODE> es el primer bit no establecido en
+la matriz <CODE>unnamed_dev_in_use</CODE>, entre 1 y 255 incluidos.
+Ver <CODE>fs/super.c:get_unnamed_dev()/put_unnamed_dev()</CODE>.
+Ha sido sugerido muchas veces que los sistemas de ficheros
+an&oacute;nimos no deber&iacute;an de usar el campo <CODE>s_dev</CODE>. 
+      </LI>
+<LI><B>s_blocksize, s_blocksize_bits</B>: tama&ntilde;o del bloque y
+log2(tama&ntilde;o del bloque).
+</LI>
+<LI><B>s_lock</B>: indica cuando un superbloque est&aacute; actualmente
+bloqueado por <CODE>lock_super()/unlock_super()</CODE>.
+</LI>
+<LI><B>s_dirt</B>: establece cuando el superbloque est&aacute; modificado, y
+limpiado cuando es vuelto a ser escrito a disco.
+</LI>
+<LI><B>s_type</B>: puntero a <CODE>struct file_system_type</CODE> del
+sistema de ficheros correspondiente. El m&eacute;todo
+<CODE>read_super()</CODE> del sistema de ficheros no necesita ser
+establecido como VFS <CODE>fs/super.c:read_super()</CODE>, lo
+establece para ti si el <CODE>read_super()</CODE> que es espec&iacute;fico
+del sistema de ficheros tiene &eacute;xito, y se reinicializa a NULL si
+es que falla.
+</LI>
+<LI><B>s_op</B>: puntero a la estructura <CODE>super_operations</CODE>,
+la cual contiene m&eacute;todos espec&iacute;ficos del sistema de ficheros
+para leer/escribir inodos, etc. Es el trabajo del m&eacute;todo 
+<CODE>read_super()</CODE> del sistema de ficheros inicializar
+<CODE>s_op</CODE> correctamente.
+</LI>
+<LI><B>dq_op</B>: operaciones de cuota de disco.
+</LI>
+<LI><B>s_flags</B>: banderas de superbloque.
+</LI>
+<LI><B>s_magic</B>:  n&uacute;mero m&aacute;gico del sistema de ficheros. Usado
+por el sistema de ficheros de minix para diferenciar entre
+m&uacute;ltiples tipos del mismo.
+</LI>
+<LI><B>s_root</B>: dentry de la raiz del sistema de ficheros. Es
+trabajo de <CODE>read_super()</CODE> leer el inodo raiz desde el
+disco y pas&aacute;rselo a <CODE>d_alloc_root()</CODE> para asignar la
+dentry e instanciarlo. Algunos sistemas de ficheros dicen
+"raiz" mejor que "/" y por lo tanto usamos la funci&oacute;n m&aacute;s
+gen&eacute;rica <CODE>d_alloc()</CODE> para unir la dentry a un nombre, ej.
+pipefs se monta a si mismo en "pipe:" como su raiz en vez de
+"/".
+</LI>
+<LI><B>s_wait</B>: cola de espera de los procesos esperando para
+que el superbloque sea desbloqueado.
+</LI>
+<LI><B>s_dirty</B>: una lista de todos los inodos sucios. Recalcar
+que si un inodo est&aacute; sucio (<CODE>inode->i_state &amp; I_DIRTY</CODE>)
+entonces su lista sucia espec&iacute;fica del superbloque es
+enlazada a trav&eacute;s de <CODE>inode->i_list</CODE>.
+</LI>
+<LI><B>s_files</B>: una lista de todos los ficheros abiertos en
+este superbloque. Util para decidir cu&aacute;ndo los sistemas de 
+archivos pueden ser remontados como de s&oacute;lo lectura, ver
+<CODE>fs/file_table.c:fs_may_remount_ro()</CODE> el cual va a 
+trav&eacute;s de la lista <CODE>sb->s_files</CODE> y deniega el remontar
+si hay ficheros abiertos para escritura (<CODE>file->f_mode &amp;
+FMODE_WRITE</CODE>) o ficheros con desenlaces pendientes
+(<CODE>inode->i_nlink == 0</CODE>).
+</LI>
+<LI><B>s_bdev</B>: para <CODE>FS_REQUIRES_DEV</CODE>, esto apunta a la
+estructura block_device describiendo el dispositivo en el que
+el sistema de ficheros est&aacute; montado.
+</LI>
+<LI><B>s_mounts</B>: una lista de todas las estructuras
+<CODE>vfsmount</CODE>, una por cada instancia montada de este
+superbloque.
+</LI>
+<LI><B>s_dquot</B>: m&aacute;s miembros de diskquota.</LI>
+</OL>
+</P>
+<P>Las operaciones de superbloque son descritas en la estructura
+<CODE>super_operations</CODE> declarada en <CODE>include/linux/fs.h</CODE>:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+struct super_operations {
+        void (*read_inode) (struct inode *);
+        void (*write_inode) (struct inode *, int);
+        void (*put_inode) (struct inode *);
+        void (*delete_inode) (struct inode *);
+        void (*put_super) (struct super_block *);
+        void (*write_super) (struct super_block *);
+        int (*statfs) (struct super_block *, struct statfs *);
+        int (*remount_fs) (struct super_block *, int *, char *);
+        void (*clear_inode) (struct inode *);
+        void (*umount_begin) (struct super_block *);
+};
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>
+<OL>
+<LI><B>read_inode</B>: lee el inodo desde el sistema de archivos. Es
+s&oacute;lo llamado desde <CODE>fs/inode.c:get_new_inode()</CODE>, y desde
+<CODE>iget4()</CODE> (y por consiguiente <CODE>iget()</CODE>). Si un
+sistema de ficheros quiere usar <CODE>iget()</CODE> entonces
+<CODE>read_inode()</CODE> debe de ser implementado - en otro caso
+<CODE>get_new_inode()</CODE> fallar&aacute;. 
+Mientras el inodo est&aacute; siendo leido est&aacute; bloqueado
+(<CODE>inode->i_state = I_LOCK</CODE>). Cuando la funci&oacute;n regresa, 
+todos los que est&aacute;n esperando en <CODE>inode->i_wait</CODE> son
+despertados. El trabajo del m&eacute;todo <CODE>read_inode()</CODE> del
+sistema de ficheros es localizar el bloque del disco que
+contiene el inodo a ser le&iacute;do y usar la funcion de la antememoria intermedia
+<CODE>bread()</CODE> para leerlo e inicializar varios campos de la
+estructura de inodos, por ejemplo el <CODE>inode->i_op</CODE>  y 
+<CODE>inode->i_fop</CODE> para que los niveles VFS conozcan qu&eacute; 
+operaciones pueden ser efectuadas en el inodo o fichero
+correspondiente.
+Los sistemas de ficheros que no implementan
+<CODE>read_inode()</CODE> son ramfs y pipefs. Por ejemplo, ramfs
+tiene su propia funci&oacute;n de generaci&oacute;n de inodos
+<CODE>ramfs_get_inode()</CODE> con todas las operaciones de inodos
+llam&aacute;ndola cuando se necesita.
+</LI>
+<LI><B>write_inode</B>: escribe el inodo de vuelta al disco. Similar
+a <CODE>read_inode()</CODE> en que necesita localizar el bloque
+relevante en el disco e interactuar con la antememoria intermedia llamando
+a <CODE>mark_buffer_dirty(bh)</CODE>. Este m&eacute;todo es llamado en los 
+inodos sucios (aquellos marcados como sucios por
+<CODE>mark_inode_dirty()</CODE>) cuando el inodo necesita ser 
+sincronizado individualmente o como parte de la actualizacion
+entera del sistema de ficheros.
+</LI>
+<LI><B>put_inode</B>: llamado cuando la cuenta de referencia es
+decrementada.
+</LI>
+<LI><B>delete_inode</B>: llamado cuando <CODE>inode->i_count</CODE> y
+<CODE>inode->i_nlink</CODE> llegan a 0. El sistema de ficheros borra
+la copia en disco del inodo y llama a <CODE>clear_inode()</CODE> en
+el inodo VFS para "terminar con &eacute;l con el perjuicio extremo".
+</LI>
+<LI><B>put_super</B>: llamado en las &uacute;ltimas etapas de la llamada
+al sistema <B>umount(2)</B> para notificar al sistema de 
+ficheros que cualquier informaci&oacute;n mantenida por el sistema de
+ficheros sobre esa instancia tiene que ser liberada. T&iacute;picamente
+esto <CODE>brelse()</CODE> el bloque conteniendo el superbloque y
+<CODE>kfree()</CODE> cualesquiera bitmaps asignados para bloques
+libres, inodos, etc. 
+        </LI>
+<LI><B>write_super</B>: llamado cuando el superbloque necesita ser
+vuelto a escribir en el disco. Deber&iacute;a de encontrar el bloque
+conteniendo el superbloque (usualmente mantenido en el &aacute;rea
+<CODE>sb-private</CODE>) y <CODE>mark_buffer_dirty(bh)</CODE>. Tambi&eacute;n
+deber&iacute;a de limpiar la bandera <CODE>sb->s_dirt</CODE>.
+</LI>
+<LI><B>statfs</B>: implementa las llamadas al sistema 
+<B>fstatfs(2)/statfs(2)</B>. N&oacute;tese que el puntero a
+<CODE>struct statfs</CODE> pasado como argumento, es el puntero del
+n&uacute;cleo, no un puntero del usuario, por lo tanto no necesitamos
+hacer ninguna E/S al espacio de usuario. Si no est&aacute; implementada
+entonces <CODE>statfs(2)</CODE> fallar&aacute; con <CODE>ENOSYS</CODE>.
+</LI>
+<LI><B>remount_fs</B>: llamado cuando el sistema de ficheros est&aacute;
+siendo remontado.
+</LI>
+<LI><B>clear_inode</B>: llamado desde el nivel VFS
+<CODE>clear_inode()</CODE>. Los sistemas que atacan datos privados
+a la estructura del inodo (a trav&eacute;s del campo
+<CODE>generic_ip</CODE>) deben liberarse aqu&iacute;.
+</LI>
+<LI><B>umount_begin</B>: llamado durante el desmontaje forzado para
+notificarlo al sistema de ficheros de antemano, por lo tanto puede
+ser lo mejor para asegurarse que nada mantiene al sistema de 
+ficheros ocupado. Actualmente usado s&oacute;lo por NFS. Esto no
+tiene nada que hacer con la idea del soporte de
+desmontaje forzado del nivel gen&eacute;rico de VFS </LI>
+</OL>
+</P>
+<P>Por lo tanto, d&eacute;janos mirar qu&eacute; pasa cuando montamos un sistema de
+ficheros en disco (<CODE>FS_REQUIRES_DEV</CODE>). La implementaci&oacute;n de la
+llamada al sistema <B>mount(2)</B>  est&aacute; en
+<CODE>fs/super.c:sys_mount()</CODE> que es justo un envoltorio que copia
+las opciones, el tipo del sistema de ficheros y el nombre del dispositivo
+para la funci&oacute;n <CODE>do_mount()</CODE>, la cual realiza el trabajo real:</P>
+<P>
+<OL>
+<LI>El controlador del sistema de ficheros es cargado si se necesita y
+la cuenta de referencia del m&oacute;dulo es incrementada. N&oacute;tese
+que durante la operaci&oacute;n de montaje, la cuenta del sistema de
+ficheros es incrementada dos veces - una vez por
+<CODE>do_mount()</CODE> llamando a <CODE>get_fs_type()</CODE> y otra vez
+por <CODE>get_sb_dev()</CODE> llamando a  <CODE>get_filesystem()</CODE> si
+<CODE>read_super()</CODE> tuvo &eacute;xito. El primer incremento es para
+prevenir la descarga del m&oacute;dulo mientras estamos dentro del
+m&eacute;todo <CODE>read_super()</CODE>, y el segundo incremento es para
+indicar que el m&oacute;dulo est&aacute; en uso por esta instancia montada.
+Obviamente, <CODE>do_mount()</CODE> decrementa la cuenta antes de
+regresar, por lo tanto, despu&eacute;s de todo, la cuenta s&oacute;lo crece en
+1 despu&eacute;s de cada montaje.
+</LI>
+<LI>Desde, que en nuestro caso, <CODE>fs_type->fs_flags &amp; FS_REQUIRES_DEV</CODE>
+es verdad, el superbloque es inicializado por una llamada a 
+<CODE>get_sb_bdev()</CODE>, la cual obtiene la referencia al
+dispositivo de bloques e interact&uacute;a con el m&eacute;todo 
+<CODE>read_super()</CODE> del sistema de ficheros para rellenar el
+superbloque. Si todo va vien, la estructura <CODE>super_block</CODE>
+es inicializada y tenemos una referencia extra al m&oacute;dulo del
+sistema de ficheros y una referencia al dispositivo de bloques
+subyacente.
+        </LI>
+<LI>Una nueva estructura <CODE>vfsmount</CODE> es asignada y enlazada a
+la lista <CODE>sb->s_mounts</CODE> y a la lista global
+<CODE>vfsmntlist</CODE>. El campo <CODE>vfsmount</CODE> de
+<CODE>mnt_instances</CODE> nos permite encontrar todas las instancias
+montadas en el mismo superbloque que este. El campo
+<CODE>mnt_list</CODE> nos permite encontrar todas las instancias
+para todos los superbloques a lo largo del sistema. El campo
+<CODE>mnt_sb</CODE> apunta a este superbloque y <CODE>mnt_root</CODE> 
+tiene una nueva referencia a la dentry <CODE>sb->s_root</CODE>.</LI>
+</OL>
+</P>
+
+<H2><A NAME="ss3.6">3.6</A> <A HREF="dentro-nucleo-linux.html#toc3.6">Ejemplo de un Sistema de Ficheros Virtual: pipefs</A>
+</H2>
+
+
+<P>Como un ejemplo simple del sistema de ficheros de Linux que no requiere
+un dispositivo de bloque para montar, d&eacute;janos considerar pipefs desde
+<CODE>fs/pipe.c</CODE>. El pre&aacute;mbulo del sistema de ficheros es bastante
+directo y requiere una peque&ntilde;a explicaci&oacute;n:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+static DECLARE_FSTYPE(pipe_fs_type, "pipefs", pipefs_read_super,
+        FS_NOMOUNT|FS_SINGLE);
+
+static int __init init_pipe_fs(void)
+{
+        int err = register_filesystem(&amp;pipe_fs_type);
+        if (!err) {
+                pipe_mnt = kern_mount(&amp;pipe_fs_type);
+                err = PTR_ERR(pipe_mnt);
+                if (!IS_ERR(pipe_mnt))
+                        err = 0;
+        }
+        return err;
+}
+
+static void __exit exit_pipe_fs(void)
+{
+        unregister_filesystem(&amp;pipe_fs_type);
+        kern_umount(pipe_mnt);
+}
+
+module_init(init_pipe_fs)
+module_exit(exit_pipe_fs)
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>El sistema de ficheros es del tipo <CODE>FS_NOMOUNT|FS_SINGLE</CODE>, lo que
+significa que no puede ser montado desde el espacio de usuario y s&oacute;lo
+puede haber uno en el sistema. El fichero <CODE>FS_SINGLE</CODE> tambi&eacute;n
+significa que debe de ser montado a trav&eacute;s de <CODE>kern_mount()</CODE>
+despu&eacute;s de que haya sido registrado con &eacute;xito a trav&eacute;s de
+<CODE>register_filesystem()</CODE>, lo cual es exactamente lo que pasa en
+<CODE>init_pipe_fs()</CODE>. El &uacute;nico fallo en esta funci&oacute;n es que si
+<CODE>kern_mount()</CODE> falla (ej. porque <CODE>kmalloc()</CODE> fall&oacute; en
+<CODE>add_vfsmnt()</CODE>) entonces el sistema de ficheros es dejado como
+registrado pero la inicializaci&oacute;n del m&oacute;dulo falla. Esto causar&aacute; que 
+<B>cat /proc/filesystems</B> falle (justamente acabo de enviar un
+parche a Linus mencion&aacute;ndole que esto no es un fallo real hoy
+en d&iacute;a porque pipefs no puede ser compilado como m&oacute;dulo, deber&iacute;a de
+ser escrito desde el punto de vista de que en el futuro pudiera ser
+modularizado).</P>
+<P>El resultado de <CODE>register_filesystem()</CODE> es que
+<CODE>pipe_fs_type</CODE> es enlazado en la lista <CODE>file_systems</CODE>, por
+lo tanto uno puede leer <CODE>/proc/filesystems</CODE> y encontrar
+la entrada "pipefs" all&iacute; con la bandera "nodev" indicando que
+<CODE>FS_REQUIRES_DEV</CODE> no fue establecida.
+El archivo <CODE>/proc/filesystems</CODE> deber&iacute;a realmente de ser capaz de
+soportar todas las nuevas banderas <CODE>FS_</CODE> (y yo he hecho un parche
+que lo hace) pero no puede ser realizado porque har&aacute; fallar a todas las
+aplicaciones de usuario que lo utilicen. A pesar de que los interfaces del
+n&uacute;cleo Linux cambian cada minuto (s&oacute;lo para mejor) cuando se refiere a
+la compatibilidad del espacio de usuario, Linux es un sistema operativo
+muy conservador que permite que muchas aplicaciones sean usadas durante
+un largo periodo de tiempo sin ser recompiladas.</P>
+<P>El resultado de <CODE>kern_mount()</CODE> es que:</P>
+<P>
+<OL>
+<LI>Un nuevo n&uacute;mero de dispositvo sin nombre (an&oacute;nimo) es asignado
+estableciendo un bit en el bitmap <CODE>unnamed_dev_in_use</CODE>;
+si no hay m&aacute;s bits entonces <CODE>kern_mount()</CODE> fallar&aacute; con
+<CODE>EMFILE</CODE>.
+</LI>
+<LI>Una nueva estructura superbloque es asignada por medio de
+<CODE>get_empty_super()</CODE>. La funci&oacute;n
+<CODE>get_empty_super()</CODE> camina a trav&eacute;s de las cabeceras de 
+las lista de superbloques por <CODE>super_block</CODE> y busca
+una entrada vac&iacute;a, esto es <CODE>s->s_dev == 0</CODE>. Si no
+se encuentra dicho superbloque vac&iacute;o entonces uno nuevo es
+asignado usando <CODE>kmalloc()</CODE> con la prioridad 
+<CODE>GFP_USER</CODE>. El n&uacute;mero m&aacute;ximo de superbloques en el
+sistema es chequeado en <CODE>get_empty_super()</CODE>, por lo tanto
+empieza fallando, uno puede modificar el par&aacute;metro ajustable
+<CODE>/proc/sys/fs/super-max</CODE>.
+</LI>
+<LI>Un m&eacute;todo espec&iacute;fico del sistema de ficheros
+<CODE>pipe_fs_type->read_super()</CODE>, esto es
+<CODE>pipefs_read_super()</CODE>, es invocada, la cual asigna el
+inodo y la dentry raiz <CODE>sb->s_root</CODE>, y establece
+<CODE>sb->s_op</CODE> para ser <CODE>&amp;pipefs_ops</CODE>.
+</LI>
+<LI> Entonces <CODE>kern_mount()</CODE> llama a <CODE>add_vfsmnt(NULL,
+sb->s_root, "none")</CODE> la cual asigna una nueva estructura
+<CODE>vfsmount</CODE> y la enlaza en <CODE>vfsmntlist</CODE> y
+<CODE>sb->s_mounts</CODE>.
+</LI>
+<LI>El <CODE>pipe_fs_type->kern_mnt</CODE> es establecido a esta nueva
+estructura <CODE>vfsmount</CODE> y es devuelta. El motivo por el que
+el valor de retorno de <CODE>kern_mount()</CODE> es una estructura
+<CODE>vfsmount</CODE> es porque incluso los sistemas de ficheros
+<CODE>FS_SINGLE</CODE> pueden ser montados m&uacute;ltiples veces y 
+por lo tanto sus <CODE>mnt->mnt_sb</CODE> deber&iacute;an apuntar a la
+misma cosa, que ser&iacute;a tonto devolverla desde m&uacute;ltiples
+llamadas a <CODE>kern_mount()</CODE>.</LI>
+</OL>
+</P>
+<P>Ahora que el sistema de ficheros est&aacute; registrado y montado dentro del
+n&uacute;cleo podemos usarlo. El punto de entrada en el sistema de ficheros
+pipefs es la llamada al sistema <B>pipe(2)</B>, implementada por una
+funci&oacute;n dependiente de la arquitectura <CODE>sys_pipe()</CODE>, pero el
+trabajo real es realizado por un funci&oacute;n portable
+<CODE>fs/pipe.c:do_pipe()</CODE>. D&eacute;janos mirar entonces en <CODE>do_pipe()</CODE>.
+La interacci&oacute;n con pipefs sucede cuando <CODE>do_pipe()</CODE> llama a
+<CODE>get_pipe_inode()</CODE> para asignar un nuevo inodo pipefs. Para este
+inodo, <CODE>inode->i_sb</CODE> es establecido al superbloque de pipefs
+<CODE>pipe_mnt->mnt_sb</CODE>, las operaciones del archivo <CODE>i_fop</CODE> son
+establecidas a <CODE>rdwr_pipe_fops</CODE> y el n&uacute;mero de lectores y
+escritores (mantenidos en <CODE>inode->i_pipe</CODE>) es establecido a 1. El
+motivo por el que hay un campo de inodos separado <CODE>i_pipe</CODE> en
+vez de mantenerlo en la uni&oacute;n <CODE>fs-private</CODE> es que pipes y FIFOs
+comparten el mismo c&oacute;digo y los FIFOs puede existir en otros sistemas
+de ficheros los cuales usan otros caminos de acceso con la misma uni&oacute;n,
+lo cual en C es muy malo y puede trabajar s&oacute;lo con pura suerte. Por lo
+tanto, s&iacute;, los n&uacute;cleos 2.2.x trabajan por pura suerte y parar&aacute;n de
+trabajar tan pronto como tu retoques ligeramente los campos en el inodo.</P>
+<P>Cada llamada al sistema <B>pipe(2)</B> incrementa una cuenta de
+referencia en la instancia de montaje <CODE>pipe_mnt</CODE>.</P>
+<P>Bajo Linux, los pipes no son sim&eacute;tricos (pipes STREAM o
+bidireccionales) esto es, dos caras del mismo fichero tienes diferentes
+operaciones <CODE>file->f_op</CODE> - la <CODE>read_pipe_fops</CODE> y
+<CODE>write_pipe_fops</CODE> respectivamente. La escritura en la cara de
+lectura devuelve un <CODE>EBADF</CODE> y lo mismo si se lee en la cara de
+escritura.</P>
+
+<H2><A NAME="ss3.7">3.7</A> <A HREF="dentro-nucleo-linux.html#toc3.7">Ejemplo de Sistema de Ficheros de Disco: BFS</A>
+</H2>
+
+
+<P>Como un simple ejemplo de un sistema de ficheros Linux en disco,
+d&eacute;janos considerar BFS. El pre&aacute;mbulo del m&oacute;dulo de BFS est&aacute; en
+<CODE>fs/bfs/inode.c</CODE>:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+static DECLARE_FSTYPE_DEV(bfs_fs_type, "bfs", bfs_read_super);
+
+static int __init init_bfs_fs(void)
+{
+        return register_filesystem(&amp;bfs_fs_type);
+}
+
+static void __exit exit_bfs_fs(void)
+{
+        unregister_filesystem(&amp;bfs_fs_type);
+}
+
+module_init(init_bfs_fs)
+module_exit(exit_bfs_fs)
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>Una declaracion especial de la macro del sistema de ficheros
+<CODE>DECLARE_FSTYPE_DEV()</CODE> es usada, la cual establece el
+<CODE>fs_type->flags</CODE> a <CODE>FS_REQUIRES_DEV</CODE> para significar que
+BFS requiere un dispositivo de bloque real para ser montado.</P>
+<P>La funci&oacute;n de inicializaci&oacute;n del m&oacute;dulo registra el sistema de
+ficheros con VFS y la funci&oacute;n de limpieza (s&oacute;lo presente cuando BFS
+est&aacute; configurada para ser un m&oacute;dulo) lo desregistra.</P>
+<P>Con el sistema de ficheros registrado, podemos proceder a montarlo, lo
+cual invocar&aacute; al m&eacute;todo <CODE>fs_type->read_super()</CODE> que es
+implementado en <CODE>fs/bfs/inode.c:bfs_read_super().</CODE>. El realiza lo
+siguiente:</P>
+<P>
+<OL>
+<LI><CODE>set_blocksize(s->s_dev, BFS_BSIZE)</CODE>: desde que nosotros
+vamos a interactuar con la capa de dispositivos de bloque a
+trav&eacute;s de la antememoria intermedia, debemos inicializar unas pocas cosas,
+esto es, establecer el tama&ntilde;o del bloque y tambi&eacute;n informar a VFS
+a trav&eacute;s de los campos <CODE>s->s_blocksize</CODE> y
+<CODE>s->s_blocksize_bits</CODE>.
+</LI>
+<LI><CODE>bh = bread(dev, 0, BFS_BSIZE)</CODE>: leemos el bloque 0 del
+dispositivo a trav&eacute;s de <CODE>s->s_dev</CODE>. Este bloque es el
+superbloque del sistema.
+</LI>
+<LI>El superbloque es validado contra el n&uacute;mero <CODE>BFS_MAGIC</CODE> y,
+si es v&aacute;lido, es almacenado en el campo sb-private
+<CODE>s->su_sbh</CODE> (el cual es realmente
+<CODE>s->u.bfs_sb.si_sbh</CODE>).
+</LI>
+<LI>Entonces asignamos el bitmap del inodo
+<CODE>kmalloc(GFP_KERNEL)</CODE> y limpiamos todos sus bits a 0,
+excepto los dos primeros, los cuales estableceremos a 1 para
+indicar que nunca deberemos asignar los inodos 0 y 1. El inodo
+2 es la raiz y el correspondiente bit ser&aacute; establecido a 1 unas
+pocas lineas despu&eacute;s de cualquier forma - ¡el sistema de 
+ficheros debe de tener un inodo raiz v&aacute;lido en tiempo de
+montaje!
+</LI>
+<LI>Entonces inicializamos <CODE>s->s_op</CODE>, lo cual significa que
+podemos desde este punto llamar a la memoria intermedia de inodos a trav&eacute;s de
+<CODE>iget()</CODE>, lo cual resulta en la invocaci&oacute;n de
+<CODE>s_op->read_inode()</CODE>. Esto encuentra el bloque que
+contiene el inodo especificado (por <CODE>inode->i_ino</CODE> y
+<CODE>inode->i_dev</CODE>) y lo lee. Si fallamos al obtener el inodo
+raiz entonces liberamos el bitmap de inodos y descargaremos
+la antememoria de superbloque a la antememoria intermedia y devolveremos NULL. Si
+el inodo raiz fue leido correctamente, entonces asignamos una dentry con el
+nombre <CODE>/</CODE> (como convirti&eacute;ndolo en raiz) y lo
+instanciamos con este inodo.
+</LI>
+<LI>Ahora vamos a trav&eacute;s de todos los inodos del sistema de
+ficheros y los leemos en orden a establecer los bits correspondientes
+en nuestro bitmap interno de inodos y tambi&eacute;n calculamos otros
+par&aacute;metros internos como el desplazamiento del &uacute;ltimo inodo y el
+comienzo/final del &uacute;ltimo fichero. Cada inodo que leemos es devuelto
+atr&aacute;s a la memoria intermedia de inodos a trav&eacute;s de <CODE>iput()</CODE> - no mantenemos
+una referencia a &eacute;l m&aacute;s tiempo del necesario.
+</LI>
+<LI>Si el sistema de ficheros no fue montado como de s&oacute;lo lectura,
+marcamos la memoria intermedia del superbloque como sucio y establecemos la
+bandera <CODE>s->s_dirt</CODE> (POR HACER: ¿Porqu&eacute; hago esto?
+Originalmente, lo hice porque lo hac&iacute;a
+<CODE>minix_read_super()</CODE> pero ni minix ni BFS parecen
+modificar el superbloque en el <CODE>read_super()</CODE>).
+</LI>
+<LI>Todo est&aacute; bi&eacute;n, por lo tanto regresamos atr&aacute;s a este superbloque
+inicializado para el llamante en el nivel VFS, esto es,
+<CODE>fs/super.c:read_super()</CODE>.</LI>
+</OL>
+</P>
+<P>Despu&eacute;s       de que la funci&oacute;n <CODE>read_super()</CODE> regrese con &eacute;xito, VFS
+obtiene la referencia al m&oacute;dulo del sistema de ficheros a trav&eacute;s de
+la llamada a <CODE>get_filesystem(fs_type)</CODE> en
+<CODE>fs/super.c:get_sb_bdev()</CODE> y una referencia al dispositivo de
+bloques.</P>
+<P>Ahora, d&eacute;janos examinar qu&eacute; pasa cuando hacemos una E/S  en el
+sistema de ficheros. Ya hemos examinado c&oacute;mo los inodos son leidos
+cuando <CODE>iget()</CODE> es llamado y c&oacute;mo son quitados en
+<CODE>iput().</CODE> Leyendo inodos, configura entre otras cosas,
+<CODE>inode->i_op</CODE> y
+<CODE>inode->i_fop</CODE>; abriendo un fichero propagar&aacute;
+<CODE>inode->i_fop</CODE> en <CODE>file->f_op</CODE>.</P>
+<P>D&eacute;janos examinar el camino de c&oacute;digo de la llamada al sistema
+<B>link(2)</B>. La implementaci&oacute;n de la llamada al sistema est&aacute; en
+<CODE>fs/namei.c:sys_link()</CODE>: </P>
+<P>
+<OL>
+<LI>Los nombres del espacio de usuario son copiados en el espacio
+del n&uacute;cleo por medio de la funci&oacute;n <CODE>getname()</CODE>
+la cual realiza el chequeo de errores.
+</LI>
+<LI>Estos nombres son convertidos a datos usando 
+<CODE>path_init()/path_walk()</CODE> interactuando con dcache. El
+resultado es almacenado en las estructuras <CODE>old_nd</CODE>
+y <CODE>nd</CODE>.
+</LI>
+<LI>Si <CODE>old_nd.mnt != nd.mnt</CODE> entonces "enlace a trav&eacute;s de
+dispositvos" <CODE>EXDEV</CODE> es devuelto - uno no puede enlazar
+entre sistemas de ficheros, en Linux esto se traduce en -
+uno no puede enlazar entre m&uacute;ltiples instancias de un sistema
+de ficheros (o, en particular entre sistemas de ficheros).
+</LI>
+<LI>Una nueva dentry es creada correspondiente a <CODE>nd</CODE> por
+<CODE>lookup_create()</CODE> .
+</LI>
+<LI>Una funci&oacute;n gen&eacute;rica <CODE>vfs_link()</CODE> es llamada, la cual
+chequea si podemos crear una nueva entrada en el directorio e 
+invoca el m&eacute;todo <CODE>dir->i_op->link()</CODE>, que nos
+trae atr&aacute;s a la funci&oacute;n espec&iacute;fica del sistema de ficheros
+<CODE>fs/bfs/dir.c:bfs_link()</CODE>.
+</LI>
+<LI>Dentro de <CODE>bfs_link()</CODE>, chequeamos si estamos intentando
+enlazar un directorio, y si es as&iacute;, lo rechazamos con un error
+<CODE>EPERM</CODE>. Este es el mismo comportamiento que el est&aacute;ndar
+(ext2).
+</LI>
+<LI>Intentamos a&ntilde;adir una nueva entrada de directorio al directorio 
+especificado por la funci&oacute;n de ayuda <CODE>bfs_add_entry()</CODE>
+la cual va a trav&eacute;s de todas las entradas buscando un slot
+sin usar (<CODE>de->ino == 0</CODE>) y, cuando lo encuentra, escribe
+en el par nombre/inodo en el bloque correspondiente y lo
+marca como sucio (a una prioridad no-superbloque).
+        </LI>
+<LI>Si hemos a&ntilde;adido con &eacute;xito la entrada de directorio entonces no
+hay forma de fallar la operaci&oacute;n y por lo tanto incrementamos
+<CODE>inode->i_nlink</CODE>, actualizamos <CODE>inode->i_ctime</CODE> y
+marcamos este inodo como sucio a la vez que instanciamos la nueva
+dentry con el inodo.</LI>
+</OL>
+</P>
+<P>Otras operaciones de inodos relacionadas como <CODE>unlink()/rename()</CODE>
+etc. trabajan en una forma similar, por lo tanto no se gana mucho
+examin&aacute;ndolas a todas ellas en detalle.</P>
+
+<H2><A NAME="ss3.8">3.8</A> <A HREF="dentro-nucleo-linux.html#toc3.8">Dominios de Ejecuci&oacute;n y Formatos Binarios</A>
+</H2>
+
+
+<P>Linux soporta la carga de aplicaciones binarias de usuario desde disco. M&aacute;s
+interesantemente, los binarios pueden ser almacenados en formatos
+diferentes y la respuesta del sistema operativo a los programas a
+trav&eacute;s de las llamadas al sistema pueden desviarla de la norma (la
+norma es el comportamiento de Linux) tal como es requerido, en orden a
+emular los formatos encontrados en otros tipos de UNIX (COFF, etc) y
+tambi&eacute;n emular el comportamiento de las llamadas al sistema de otros
+tipos (Solaris, UnixWare, etc). Esto es para lo que son los dominios de
+ejecuci&oacute;n y los formatos binarios. </P>
+<P>Cada tarea Linux tiene una personalidad almacenada en su
+<CODE>task_struct</CODE> (<CODE>p->personality</CODE>). Las
+personalidades actualmente existentes (en el n&uacute;cleo oficial o en el
+parche a&ntilde;adido) incluyen soporte para FreeBSD, Solaris, UnixWare,
+OpenServer y algunos otros sistemas operativos populares. El valor de
+<CODE>current->personality</CODE> es dividido en dos partes:</P>
+<P>
+<OL>
+<LI>tres bytes altos - emulaci&oacute;n de fallos: <CODE>STICKY_TIMEOUTS</CODE>, 
+<CODE>WHOLE_SECONDS</CODE>, etc.</LI>
+<LI>byte bajo - personalidad propia, un n&uacute;mero &uacute;nico.</LI>
+</OL>
+</P>
+<P>Cambiando la personalidad, podemos cambiar la forma en la que el sistema
+operativo trata ciertas llamadas al sistema, por ejemplo a&ntilde;adiendo una
+<CODE>STICKY_TIMEOUT</CODE> a <CODE>current->personality</CODE> hacemos que la
+llamada al sistema <B>select(2)</B> preserve el valor del &uacute;ltimo
+argumento (timeout) en vez de almacenar el tiempo no dormido. Algunos
+programas defectuosos conf&iacute;an en sistemas operativos defectuosos (no
+Linux) y por lo tanto suministra una forma para emular fallos en casos
+donde el c&oacute;digo fuente no est&aacute; disponible y por lo tanto los fallos no
+pueden ser arreglados.</P>
+<P>El dominio de ejecuci&oacute;n es un rango contiguo de personalidades
+implementadas por un m&oacute;dulo simple. Usualmente un dominio de
+ejecuci&oacute;n simple implementa una personalidad simple, pero a veces es
+posible implementar personalidades "cerradas" en un m&oacute;dulo simple sin
+muchos condicionantes.</P>
+<P>Los dominios de ejecuci&oacute;n son implementados en
+<CODE>kernel/exec_domain.c</CODE> y fueron completamente reescritos para el
+n&uacute;cleo 2.4, comparado con el 2.2.x. La lista de dominios de ejecuci&oacute;n
+actualmente soportada por el n&uacute;cleo, a lo largo del rango de
+personalidades que soportan, est&aacute; disponible leyendo el archivo
+<CODE>/proc/execdomains</CODE>. Los dominios de ejecuci&oacute;n, excepto el
+<CODE>PER_LINUX</CODE>, pueden ser implementados como m&oacute;dulos
+din&aacute;micamente cargados. </P>
+<P>La interfaz de usuario es a trav&eacute;s de la llamada al sistema
+<B>personality(2)</B>, la cual establece la actual personalidad del
+proceso o devuelve el valor de <CODE>current->personality</CODE> si el
+argumento es establecido a una personalidad imposible. Obviamente, el
+comportamiento de esta llamada al sistema no depende de la
+personalidad.</P>
+<P>La interfaz del n&uacute;cleo para el registro de dominios de ejecuci&oacute;n
+consiste en dos funciones:</P>
+<P>
+<UL>
+<LI><CODE>int register_exec_domain(struct exec_domain *)</CODE>: registra
+el dominio de ejecuci&oacute;n enlaz&aacute;ndolo en una lista simplemente enlazada
+<CODE>exec_domains</CODE> bajo la protecci&oacute;n de escritura del 
+spinlock read-write <CODE>exec_domains_lock</CODE>. Devuelve 0 si
+tiene &eacute;xito, distinto de cero en caso de fallo.
+</LI>
+<LI><CODE>int unregister_exec_domain(struct exec_domain *)</CODE>:
+desregistra el dominio de ejecuci&oacute;n desenlaz&aacute;ndolo desde la
+lista <CODE>exec_domains</CODE>, otra vez usando el spinlock
+<CODE>exec_domains_lock</CODE> en modo de escritura. Retorna 0 si
+tiene &eacute;xito.</LI>
+</UL>
+</P>
+<P>El motivo por el que <CODE>exec_domains_lock</CODE> es read-write es que
+s&oacute;lo las peticiones de registro y desregistro modifican la lista,
+mientras haciendo <B>cat /proc/filesystems</B> llama
+<CODE>fs/exec_domain.c:get_exec_domain_list()</CODE>, el cual necesita s&oacute;lo
+acceso de lectura a la lista. Registrando un nuevo dominio de ejecuci&oacute;n
+define un "manejador lcall7" y un mapa de conversi&oacute;n de n&uacute;mero de
+se&ntilde;ales. Actualmente, el parche ABI extiende este concepto a los
+dominios de ejecuci&oacute;n para incluir informaci&oacute;n extra (como opciones de
+conector, tipos de conector, familia de direcciones y mapas de
+n&uacute;meros de errores).</P>
+<P>Los formatos binarios son implementados de una forma similar, esto es,
+una lista simplemente enlazada de formatos es definida en
+<CODE>fs/exec.c</CODE> y es protegida por un cierre read-write
+<CODE>binfmt_lock</CODE>. Tal como con <CODE>exec_domains_lock</CODE>, el
+<CODE>binfmt_lock</CODE> es tomado para leer en la mayor&iacute;a de las ocasiones
+excepto para el registro/desregistro de los formatos binarios.
+Registrando un nuevo formato binario intensifica la llamada al sistema
+<B>execve(2)</B> con nuevas funciones
+<CODE>load_binary()/load_shlib()</CODE>. Al igual que la habilidad para
+<CODE>core_dump()</CODE>. El m&eacute;todo <CODE>load_shlib()</CODE> es usado s&oacute;lo
+por la vieja llamada al sistema <B>uselib(2)</B> mientras que el
+m&eacute;todo <CODE>load_binary()</CODE> es llamada por el
+<CODE>search_binary_handler()</CODE> desde <CODE>do_execve()</CODE> el cual
+implementa la llamada al sistema <B>execve(2)</B>. </P>
+<P>La personalidad del proceso est&aacute; determinada por el formato binario
+cargado por el m&eacute;todo del correspondiente formato <CODE>load_binary()</CODE>
+usando algunas heur&iacute;sticas. Por ejemplo, para determinar los binarios
+UnixWare7, uno primero marca el binario usando la utilidad
+<B>elfmark(1)</B>, la cual establece la cabecera de ELF
+<CODE>e_flags</CODE> al valor m&aacute;gico  0x314B4455, el cual es detectado en
+tiempo de carga del ELF y <CODE>current->personality</CODE> es establecido a
+PER_SVR4. Si esta heur&iacute;stica falla entonces una m&aacute;s gen&eacute;rica como el
+tratamiento de los caminos del int&eacute;rprete ELF como
+<CODE>/usr/lib/ld.so.1</CODE> o <CODE>/usr/lib/libc.so.1</CODE> para indicar un
+binario SVR4, es usado y la personalidad es establecida a PER_SVR4. Uno
+podr&iacute;a escribir un peque&ntilde;o programa de utilidad que usara las
+capacidades del <B>ptrace(2)</B> de Linux para, en un simple paso,
+c&oacute;dificar y forzar a un programa funcionando a cualquier personalidad.</P>
+<P>Una vez que la personalidad (y entonces <CODE>current->exec_domain</CODE>)
+es conocida, las llamadas al sistema son manejadas como sigue. D&eacute;janos 
+asumir que un proceso realiza una llamada al sistema por medio de la
+instrucci&oacute;n puerta lcall7. Esto transfiere el control a
+<CODE>ENTRY(lcall7)</CODE> de <CODE>arch/i386/kernel/entry.S</CODE> porque fue
+preparado en <CODE>arch/i386/kernel/traps.c:trap_init()</CODE>. Despu&eacute;s de
+la apropiada conversi&oacute;n de la pila, <CODE>entry.S:lcall7</CODE> obtiene el
+puntero a <CODE>exec_domain</CODE> desde <CODE>current</CODE> y entonces un
+desplazamiento del manejador lcall7 con el <CODE>exec_domain</CODE> (el cual
+es codificado fuertemente como 4 en c&oacute;digo ensamblador, por lo tanto no
+puedes desplazar el campo <CODE>handler</CODE> a trav&eacute;s de la declaraci&oacute;n
+en C de <CODE>struct exec_domain</CODE>) y salta a &eacute;l. Por lo tanto, en C,
+se parecer&iacute;a a esto:</P>
+<P>
+<BLOCKQUOTE><CODE>
+<HR>
+<PRE>
+static void UW7_lcall7(int segment, struct pt_regs * regs)
+{
+       abi_dispatch(regs, &amp;uw7_funcs[regs->eax &amp; 0xff], 1);
+}
+</PRE>
+<HR>
+</CODE></BLOCKQUOTE>
+</P>
+<P>donde <CODE>abi_dispatch()</CODE> es un envoltorio sobre la tabla de
+punteros de funci&oacute;n que implementa las llamadas al sistema de esta
+personalidad <CODE>uw7_funcs</CODE>.</P>
+
+<HR>
+<A HREF="dentro-nucleo-linux-4.html">Página siguiente</A>
+<A HREF="dentro-nucleo-linux-2.html">Página anterior</A>
+<A HREF="dentro-nucleo-linux.html#toc3">Índice general</A>
+</BODY>
+</HTML>
